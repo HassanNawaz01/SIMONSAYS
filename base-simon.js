@@ -1,7 +1,7 @@
     "use strict";
 
     /* =========================================================
-       CONFIG — deploy SimonOnBase.sol on Base mainnet,
+       CONFIG - deploy SimonOnBase.sol on Base mainnet,
        then paste the deployed address below.
        ========================================================= */
     const CONTRACT_ADDRESS = "0xd376DA21BDCDD1338C2283488d592880F25F09f1";
@@ -9,6 +9,7 @@
     /* Function selectors (keccak256 of the signature, first 4 bytes) */
     const SEL = {
       mint: "0x08142c10", // mintScore(uint256,uint8)
+      mintVerified: "0x135b34bd", // mintVerifiedScore(uint256,uint8,bytes32,bytes)
       best: "0xdc0c695f", // bestScore(address)
       games: "0x2c4e591b", // totalGames()
       week: "0x06575c89", // currentWeek()
@@ -18,7 +19,7 @@
       wRange: "0x0990ccc9", // getWeekRange(uint256,uint256,uint256)
       claim: "0xb5804373", // claimBadge(uint8)
       claimed: "0xfbb905e3",// claimed(address,uint8)
-      ensName: "0x691f3431",// name(bytes32)   — Basenames L2Resolver
+      ensName: "0x691f3431",// name(bytes32)   - Basenames L2Resolver
       ensAddr: "0x3b3b57de" // addr(bytes32)
     };
 
@@ -29,9 +30,9 @@
       blockExplorerUrls: ["https://basescan.org"]
     };
 
-    /* Basenames (official Base deployments — verified) */
+    /* Basenames (official Base deployments - verified) */
     const L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
-    /* namehash("80002105.reverse") — Base coinType reverse namespace, precomputed */
+    /* namehash("80002105.reverse") - Base coinType reverse namespace, precomputed */
     const BASE_REVERSE_NODE = "08d9b0993eb8c4da57c37a4b84a6e384c2623114ff4e9370ed51c9b8935109ba";
 
     const BADGE_THRESHOLDS = [10, 25, 50];
@@ -113,7 +114,8 @@
     /* ================= difficulty modes ================= */
     const MODES = {
       practice: { label: "Practice", base: 620, step: 32, min: 220, mint: false, shuffle: false, id: null },
-      onchain: { label: "Onchain", base: 620, step: 32, min: 220, mint: true, shuffle: false, id: 1 }
+      onchain: { label: "Onchain", base: 620, step: 32, min: 220, mint: true, shuffle: false, id: 1 },
+      multiplayer: { label: "1v1 Match", base: 620, step: 32, min: 220, mint: true, shuffle: false, id: 1 }
     };
     let modeKey = "onchain";
     const PAD_COLORS = ["var(--pad-1)", "var(--pad-2)", "var(--pad-3)", "var(--pad-4)"];
@@ -122,8 +124,11 @@
 
     function updateModeUI() {
       const isPractice = modeKey === "practice";
+      const isMultiplayer = modeKey === "multiplayer";
       const hudEl = document.querySelector(".hud");
       const chainStatBox = chainBestEl.closest(".stat");
+      const multiHud = document.getElementById("multiplayerHud");
+      
       if (chainStatBox && hudEl) {
         if (isPractice) {
           chainStatBox.style.display = "none";
@@ -132,6 +137,22 @@
           chainStatBox.style.display = "";
           hudEl.style.gridTemplateColumns = "repeat(3, 1fr)";
         }
+      }
+
+      if (multiHud) {
+        multiHud.style.display = "none";
+      }
+
+      if (isMultiplayer) {
+        startBtn.textContent = isQueueing ? "Cancel Queue" : "Find 1v1 Match";
+        if (isQueueing) {
+          startBtn.style.background = "var(--bad)";
+        } else {
+          startBtn.style.background = "";
+        }
+      } else {
+        startBtn.textContent = "Start game";
+        startBtn.style.background = "";
       }
     }
 
@@ -143,6 +164,163 @@
       setStatus("Ready for " + MODES[modeKey].label + " mode");
       updateModeUI();
     }));
+
+    /* ================= WebSockets Client ================= */
+    let wsClient = null;
+    let isQueueing = false;
+    let activeMatchId = null;
+    let lastSignature = null;
+    let lastMatchId = null;
+
+    function connectWS(onConnectCallback) {
+      if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+        if (onConnectCallback) onConnectCallback();
+        return;
+      }
+      
+      const wsUrl = window.location.protocol === "https:" ? "wss://" + window.location.host : "ws://localhost:8080";
+      wsClient = new WebSocket(wsUrl);
+
+      wsClient.onopen = () => {
+        console.log("WebSocket connected");
+        if (onConnectCallback) onConnectCallback();
+      };
+
+      wsClient.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        console.log("WS Msg:", msg);
+
+        if (msg.type === "queue_status" && msg.status === "queued") {
+          isQueueing = true;
+          startBtn.disabled = false;
+          startBtn.textContent = "Cancel Queue";
+          startBtn.style.background = "var(--bad)";
+          setStatus("Searching for opponent...", "watch");
+        }
+        
+        else if (msg.type === "match_start") {
+          isQueueing = false;
+          activeMatchId = msg.matchId;
+          document.getElementById("opponentAddr").textContent = short(msg.opponent);
+          document.getElementById("opponentScore").textContent = "0";
+          document.getElementById("matchTimer").textContent = msg.timeLeft + "s";
+          document.getElementById("multiplayerHud").style.display = "block";
+          
+          runMode = MODES.multiplayer;
+          sequence = msg.initialSequence;
+          level = 1;
+          levelEl.textContent = level;
+          running = true;
+          board.classList.add("playing");
+          $("modes").classList.add("locked");
+          startBtn.disabled = true;
+          overlay.classList.remove("show");
+          applyPadColors([0, 1, 2, 3]);
+          
+          accepting = false;
+          board.classList.add("locked");
+          setStatus("Match Found! Starting...", "go");
+          
+          setTimeout(() => {
+            playSequence();
+          }, 1000);
+        }
+        
+        else if (msg.type === "timer_tick") {
+          document.getElementById("matchTimer").textContent = msg.timeLeft + "s";
+        }
+        
+        else if (msg.type === "next_round") {
+          level = msg.score + 1;
+          levelEl.textContent = level;
+          sequence = msg.sequence;
+          playSequence();
+        }
+        
+        else if (msg.type === "opponent_score") {
+          document.getElementById("opponentScore").textContent = msg.score;
+        }
+        
+        else if (msg.type === "player_failed") {
+          running = false;
+          accepting = false;
+          board.classList.remove("playing");
+          board.classList.add("locked");
+          setStatus("Mistake! Waiting for opponent...", "dead");
+          tone(0, 0.6, 110);
+        }
+        
+        else if (msg.type === "opponent_failed") {
+          setStatus("Opponent failed! Keep going!", "go");
+        }
+        
+        else if (msg.type === "match_end") {
+          running = false;
+          accepting = false;
+          board.classList.remove("playing");
+          board.classList.add("locked");
+          $("modes").classList.remove("locked");
+          startBtn.disabled = false;
+          
+          lastScore = msg.score;
+          best = Math.max(best, lastScore);
+          bestEl.textContent = best;
+          
+          lastSignature = msg.signature;
+          lastMatchId = msg.matchId;
+          
+          finalScoreEl.textContent = lastScore;
+          overSub.textContent = "levels cleared. Opponent: " + msg.opponentScore;
+          
+          mintMsg.textContent = "";
+          mintMsg.className = "";
+          mintBtn.style.display = "";
+          mintBtn.disabled = false;
+          
+          if (msg.result === "win") {
+            overTitle.textContent = "You Won! 🏆";
+            tone(2, 0.4, 330);
+            setStatus("You won the match!", "go");
+          } else if (msg.result === "lose") {
+            overTitle.textContent = "Match Lost";
+            tone(0, 0.6, 110);
+            setStatus("Opponent won.", "dead");
+          } else {
+            overTitle.textContent = "Match Tied";
+            setStatus("It's a tie!", "watch");
+          }
+          
+          overlay.classList.add("show");
+          document.getElementById("multiplayerHud").style.display = "none";
+          updateModeUI();
+          
+          wsClient.close();
+          wsClient = null;
+        }
+      };
+
+      wsClient.onclose = () => {
+        console.log("WebSocket closed");
+        if (isQueueing || running) {
+          isQueueing = false;
+          running = false;
+          setStatus("Disconnected from server.");
+          board.classList.remove("playing");
+          $("modes").classList.remove("locked");
+          startBtn.disabled = false;
+          document.getElementById("multiplayerHud").style.display = "none";
+          updateModeUI();
+        }
+      };
+      
+      wsClient.onerror = () => {
+        setStatus("Server error. Is the server running?");
+        isQueueing = false;
+        running = false;
+        startBtn.disabled = false;
+        updateModeUI();
+      };
+    }
     updateModeUI();
 
     /* ================= sound ================= */
@@ -189,6 +367,35 @@
     }
     async function startGame() {
       const selectedMode = MODES[modeKey];
+      
+      if (modeKey === "multiplayer") {
+        if (!account) {
+          setStatus("Connect wallet to search for match!", "dead");
+          await connect();
+          if (!account) {
+            setStatus("Please connect your wallet to start.");
+            return;
+          }
+        }
+        
+        if (isQueueing) {
+          if (wsClient) wsClient.close();
+          isQueueing = false;
+          updateModeUI();
+          setStatus("Ready for 1v1 Match");
+        } else {
+          setStatus("Connecting to server...");
+          startBtn.disabled = true;
+          connectWS(() => {
+            wsClient.send(JSON.stringify({
+              type: "1v1_join",
+              playerAddress: account
+            }));
+          });
+        }
+        return;
+      }
+
       if (selectedMode.mint && !account) {
         setStatus("Connect wallet to play Onchain mode!", "dead");
         await connect();
@@ -232,6 +439,18 @@
       if (!accepting) return;
       const i = +e.currentTarget.dataset.i;
       flash(i, 180);
+      
+      if (modeKey === "multiplayer") {
+        if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send(JSON.stringify({
+            type: "1v1_click",
+            matchId: activeMatchId,
+            index: i
+          }));
+        }
+        return;
+      }
+      
       if (i !== sequence[playerStep]) { gameOver(); return; }
       playerStep++;
       if (playerStep === sequence.length) {
@@ -245,7 +464,7 @@
     againBtn.addEventListener("click", () => { overlay.classList.remove("show"); startGame(); });
 
     /* =========================================================
-       WALLET — minimal-permission by design.
+       WALLET - minimal-permission by design.
        Signable actions: eth_requestAccounts (read address),
        and 0-value eth_sendTransaction for mintScore / claimBadge.
        Everything else is free read-only eth_call.
@@ -278,9 +497,9 @@
       } catch (e) { }
     }
     async function refreshOnchainBest() {
-      if (!account || !contractReady()) { chainBestEl.textContent = "–"; return; }
+      if (!account || !contractReady()) { chainBestEl.textContent = "-"; return; }
       try { chainBestEl.textContent = parseInt(await ethCall(CONTRACT_ADDRESS, SEL.best + pad64(BigInt(account))), 16) || 0; }
-      catch (e) { chainBestEl.textContent = "–"; }
+      catch (e) { chainBestEl.textContent = "-"; }
     }
     async function refreshGlobal() {
       if (!window.ethereum || !account || !contractReady()) return;
@@ -288,6 +507,26 @@
         totalGamesEl.textContent = (parseInt(await ethCall(CONTRACT_ADDRESS, SEL.games), 16) || 0).toLocaleString();
       } catch (e) { }
     }
+    function encodeMintVerifiedData(score, mode, matchId, signature) {
+      const cleanMatchId = matchId.replace(/^0x/, "");
+      const cleanSig = signature.replace(/^0x/, "");
+      
+      const selector = SEL.mintVerified.replace(/^0x/, "");
+      
+      const pScore = pad64(BigInt(score));
+      const pMode = pad64(BigInt(mode));
+      const pMatchId = cleanMatchId.padStart(64, "0");
+      
+      const signatureOffset = pad64(96n);
+      
+      const sigLen = cleanSig.length / 2;
+      const pSigLen = pad64(BigInt(sigLen));
+      
+      const paddedSig = cleanSig.padEnd(192, "0");
+      
+      return "0x" + selector + pScore + pMode + pMatchId + signatureOffset + pSigLen + paddedSig;
+    }
+
     async function mint() {
       mintMsg.className = "";
       if (!account) { await connect(); if (!account) return; }
@@ -299,7 +538,20 @@
         await ensureBase();
         mintBtn.disabled = true;
         mintMsg.textContent = "Confirm the transaction in your wallet. It's a 0 ETH contract call.";
-        const data = SEL.mint + pad64(lastScore) + pad64(runMode.id);
+        
+        let data;
+        if (runMode === MODES.multiplayer) {
+          if (!lastSignature || !lastMatchId) {
+            mintMsg.textContent = "Signature or Match ID missing from server.";
+            mintMsg.className = "err";
+            mintBtn.disabled = false;
+            return;
+          }
+          data = encodeMintVerifiedData(lastScore, 1, lastMatchId, lastSignature);
+        } else {
+          data = SEL.mint + pad64(lastScore) + pad64(runMode.id);
+        }
+
         const tx = await window.ethereum.request({
           method: "eth_sendTransaction",
           params: [{ from: account, to: CONTRACT_ADDRESS, value: "0x0", data }]
@@ -326,7 +578,7 @@
     }
 
     /* =========================================================
-       BASENAMES — reverse resolve + forward verify (anti-spoof)
+       BASENAMES - reverse resolve + forward verify (anti-spoof)
        ========================================================= */
     const nameCache = new Map();
     async function resolveBasename(addr) {
@@ -353,7 +605,7 @@
     }
 
     /* =========================================================
-       LEADERBOARD — weekly seasons + all-time, gas-free reads
+       LEADERBOARD - weekly seasons + all-time, gas-free reads
        ========================================================= */
     let lbMode = "week";
     const PAGE = 200, MAX_PLAYERS = 2000;
@@ -453,12 +705,12 @@
     lbRefresh.addEventListener("click", loadLeaderboard);
 
     /* =========================================================
-       BADGES — milestone progress + soulbound claims
+       BADGES - milestone progress + soulbound claims
        ========================================================= */
     async function refreshBadges() {
       const bBest = $("bBest"), bNext = $("bNext"), bBar = $("bBar");
       if (!account || !contractReady()) {
-        bBest.textContent = "–"; bNext.textContent = "Connect wallet to track progress"; bBar.style.width = "0%";
+        bBest.textContent = "-"; bNext.textContent = "Connect wallet to track progress"; bBar.style.width = "0%";
         return;
       }
       try {

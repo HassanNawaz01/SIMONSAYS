@@ -14,5 +14,8 @@
     "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "ethers": "^6.17.0",
     "hardhat": "^3.9.1"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
   }
 }

@@ -1,5 +1,5 @@
     /* ═══════════════════════════════════════════
-       SIMON ON BASE — Premium Dark UI
+       SIMON ON BASE - Premium Dark UI
        ═══════════════════════════════════════════ */
     :root {
       --bg: #060710;
@@ -344,7 +344,7 @@
     /* ═══════════ MODE SELECTOR ═══════════ */
     .modes {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 8px;
       width: 100%;
     }
@@ -973,7 +973,7 @@
       .brand { margin-right: auto }
       #walletBtn { order: 2 }
       nav { order: 3; width: 100%; justify-content: center; margin-top: 2px }
-      .modes { grid-template-columns: repeat(2, 1fr) }
+      .modes { grid-template-columns: 1fr }
       .stat b { font-size: 20px }
       .card .big { font-size: 56px }
     }
