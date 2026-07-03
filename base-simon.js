@@ -104,17 +104,46 @@
     const overTitle = $("overTitle"), overSub = $("overSub"), badgeMsg = $("badgeMsg");
 
     /* ================= tabs ================= */
-    document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {
-      if (running && b.dataset.view !== "play") {
-        if (!confirm("Are you sure you want to quit the current game?")) {
-          return;
-        }
+    let quitConfirmCallback = null;
+    let quitCancelCallback = null;
+
+    function promptQuit(onConfirm, onCancel) {
+      const quitOverlay = document.getElementById("quitOverlay");
+      if (quitOverlay) quitOverlay.classList.add("show");
+      
+      quitConfirmCallback = () => {
+        if (quitOverlay) quitOverlay.classList.remove("show");
         stopActiveGame();
-      }
+        if (onConfirm) onConfirm();
+      };
+      
+      quitCancelCallback = () => {
+        if (quitOverlay) quitOverlay.classList.remove("show");
+        if (onCancel) onCancel();
+      };
+    }
+
+    document.getElementById("confirmQuitBtn").addEventListener("click", () => {
+      if (quitConfirmCallback) quitConfirmCallback();
+    });
+
+    document.getElementById("cancelQuitBtn").addEventListener("click", () => {
+      if (quitCancelCallback) quitCancelCallback();
+    });
+
+    function switchTab(b) {
       document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
       document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "view-" + b.dataset.view));
       if (b.dataset.view === "ranks") loadLeaderboard();
       if (b.dataset.view === "badges") refreshBadges();
+    }
+
+    document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {
+      if (running && b.dataset.view !== "play") {
+        promptQuit(() => switchTab(b));
+      } else {
+        switchTab(b);
+      }
     }));
 
     /* ================= difficulty modes ================= */
@@ -162,18 +191,20 @@
       }
     }
 
-    document.querySelectorAll(".mode").forEach(m => m.addEventListener("click", () => {
-      if (running) {
-        if (!confirm("Are you sure you want to quit the current game?")) {
-          return;
-        }
-        stopActiveGame();
-      }
+    function switchMode(m) {
       modeKey = m.dataset.mode;
       document.querySelectorAll(".mode").forEach(x => x.classList.toggle("on", x === m));
       practiceNote.textContent = MODES[modeKey].mint ? "" : "Practice runs are not minted onchain. Just for training.";
       setStatus("Ready for " + MODES[modeKey].label + " mode");
       updateModeUI();
+    }
+
+    document.querySelectorAll(".mode").forEach(m => m.addEventListener("click", () => {
+      if (running) {
+        promptQuit(() => switchMode(m));
+      } else {
+        switchMode(m);
+      }
     }));
 
     /* ================= WebSockets Client ================= */
@@ -189,7 +220,8 @@
         return;
       }
       
-      const wsUrl = window.location.protocol === "https:" ? "wss://" + window.location.host : "ws://localhost:3000";
+      const params = new URLSearchParams(window.location.search);
+      const wsUrl = params.get("ws") || "ws://localhost:3000";
       wsClient = new WebSocket(wsUrl);
 
       wsClient.onopen = () => {
