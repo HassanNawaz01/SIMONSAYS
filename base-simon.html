@@ -1067,7 +1067,7 @@
 
       <div class="safe">
         <div class="dot"></div>
-        <div><b style="color:#fff">Wallet-safe by design.</b> This app only reads your address. No token approvals, no message signatures, no spending permissions — ever. The only signable actions are two plain 0-ETH calls: minting a score and claiming a badge. Badges are soulbound, so they can't be moved by anyone.</div>
+        <div><b style="color:#fff">Wallet-safe by design.</b> This app only reads your wallet address. There are no token approvals, no message signatures, and no spending permissions required. The only transactions you ever sign are two zero-value contract calls to mint a score or claim a badge. Badges are soulbound, meaning they are permanently tied to your address and cannot be transferred.</div>
       </div>
     </section>
 
@@ -1111,12 +1111,12 @@
         </div>
         <div class="badge locked" data-tier="1">
           <div class="badge-art"><div class="orb" style="background:#0052FF"></div></div>
-          <div class="badge-info"><b>Base Runner</b><span>Clear level 25 — serious memory</span></div>
+          <div class="badge-info"><b>Base Runner</b><span>Clear level 25. That takes serious memory.</span></div>
           <div class="badge-cta" data-slot="1"><span class="badge-state locked">Locked</span></div>
         </div>
         <div class="badge locked" data-tier="2">
           <div class="badge-art"><div class="orb" style="background:#A6C2FF"></div></div>
-          <div class="badge-info"><b>Onchain Legend</b><span>Clear level 50 — top 0.1% territory</span></div>
+          <div class="badge-info"><b>Onchain Legend</b><span>Clear level 50. You are in the top 0.1% of players.</span></div>
           <div class="badge-cta" data-slot="2"><span class="badge-state locked">Locked</span></div>
         </div>
       </div>
@@ -1266,8 +1266,8 @@
       if (running) return;
       modeKey = m.dataset.mode;
       document.querySelectorAll(".mode").forEach(x => x.classList.toggle("on", x === m));
-      practiceNote.textContent = MODES[modeKey].mint ? "" : "Practice runs are never minted — pure training.";
-      setStatus("Ready — " + MODES[modeKey].label + " mode");
+      practiceNote.textContent = MODES[modeKey].mint ? "" : "Practice runs are not minted onchain. Just for training.";
+      setStatus("Ready for " + MODES[modeKey].label + " mode");
     }));
 
     /* ================= sound ================= */
@@ -1301,11 +1301,11 @@
     async function playSequence() {
       accepting = false; board.classList.add("locked");
       if (runMode.shuffle) shuffleColors();
-      setStatus("Watch the pattern…", "watch");
+      setStatus("Watch the pattern...", "watch");
       await sleep(650);
       for (const i of sequence) { flash(i, speed()); await sleep(speed() + 140); }
       accepting = true; playerStep = 0; board.classList.remove("locked");
-      setStatus("Your turn", "go");
+      setStatus("Your turn!", "go");
     }
     function nextRound() {
       level++; levelEl.textContent = level;
@@ -1332,7 +1332,7 @@
       tone(0, 0.6, 110);
       setStatus("Game over", "dead");
       finalScoreEl.textContent = lastScore;
-      overSub.textContent = "levels cleared · " + runMode.label;
+      overSub.textContent = "levels cleared in " + runMode.label + " mode";
       mintMsg.textContent = ""; mintMsg.className = "";
       if (runMode.mint) {
         mintBtn.style.display = "";
@@ -1408,24 +1408,24 @@
       mintMsg.className = "";
       if (!account) { await connect(); if (!account) return; }
       if (!contractReady()) {
-        mintMsg.textContent = "Score contract not set yet. Deploy SimonOnBase.sol and add its address in this file.";
+        mintMsg.textContent = "Contract address is missing. You need to deploy SimonOnBase.sol first and set the address.";
         mintMsg.className = "err"; return;
       }
       try {
         await ensureBase();
         mintBtn.disabled = true;
-        mintMsg.textContent = "Confirm in your wallet — 0 ETH, one contract call.";
+        mintMsg.textContent = "Confirm the transaction in your wallet. It's a 0 ETH contract call.";
         const data = SEL.mint + pad64(lastScore) + pad64(runMode.id);
         const tx = await window.ethereum.request({
           method: "eth_sendTransaction",
           params: [{ from: account, to: CONTRACT_ADDRESS, value: "0x0", data }]
         });
-        mintMsg.innerHTML = "Score minted ✓ <a href='" + BASE_CHAIN.blockExplorerUrls[0] + "/tx/" + tx + "' target='_blank' rel='noopener noreferrer'>View on Basescan</a>";
+        mintMsg.innerHTML = "Score minted successfully! ✓ <a href='" + BASE_CHAIN.blockExplorerUrls[0] + "/tx/" + tx + "' target='_blank' rel='noopener noreferrer'>View on Basescan</a>";
         mintMsg.className = "ok";
         setTimeout(() => { refreshOnchainBest(); refreshGlobal(); }, 6000);
         setTimeout(() => { refreshOnchainBest(); refreshGlobal(); loadLeaderboard(); refreshBadges(); }, 15000);
       } catch (e) {
-        mintMsg.textContent = (e && e.code === 4001) ? "Transaction cancelled." : "Transaction failed. Please try again.";
+        mintMsg.textContent = (e && e.code === 4001) ? "Transaction canceled." : "Transaction failed. Please try again.";
         mintMsg.className = "err"; mintBtn.disabled = false;
       }
     }
@@ -1536,7 +1536,7 @@
           fetchPage = (s, c) => ethCall(CONTRACT_ADDRESS, SEL.range + pad64(s) + pad64(c)).then(decodeRange3);
         }
         count = Math.min(count, MAX_PLAYERS);
-        if (count === 0) { lbMessage(lbMode === "week" ? "No scores this season yet — claim the crown!" : "No scores minted yet — be the first!"); lbRefresh.disabled = false; return; }
+        if (count === 0) { lbMessage(lbMode === "week" ? "No scores this season yet. Claim the crown!" : "No scores minted yet. Be the first!"); lbRefresh.disabled = false; return; }
         let all = [];
         for (let s = 0; s < count; s += PAGE) all = all.concat(await fetchPage(s, Math.min(PAGE, count - s)));
         all.sort((a, b) => b.score - a.score);
@@ -1574,15 +1574,15 @@
     async function refreshBadges() {
       const bBest = $("bBest"), bNext = $("bNext"), bBar = $("bBar");
       if (!account || !contractReady()) {
-        bBest.textContent = "–"; bNext.textContent = "connect to track"; bBar.style.width = "0%";
+        bBest.textContent = "–"; bNext.textContent = "Connect wallet to track progress"; bBar.style.width = "0%";
         return;
       }
       try {
         const myBest = parseInt(await ethCall(CONTRACT_ADDRESS, SEL.best + pad64(BigInt(account))), 16) || 0;
         bBest.textContent = myBest;
         const next = BADGE_THRESHOLDS.find(t => myBest < t);
-        if (next) { bNext.textContent = "next badge at " + next; bBar.style.width = Math.min(100, myBest / next * 100) + "%"; }
-        else { bNext.textContent = "all badges unlocked 🏆"; bBar.style.width = "100%"; }
+        if (next) { bNext.textContent = "Next badge at " + next; bBar.style.width = Math.min(100, myBest / next * 100) + "%"; }
+        else { bNext.textContent = "All badges unlocked! 🏆"; bBar.style.width = "100%"; }
         for (let tier = 0; tier < 3; tier++) {
           const el = document.querySelector('.badge[data-tier="' + tier + '"]');
           const slot = el.querySelector(".badge-cta");
@@ -1608,16 +1608,16 @@
       try {
         await ensureBase();
         btn.disabled = true;
-        badgeMsg.textContent = "Confirm in your wallet — 0 ETH, soulbound badge mint.";
+        badgeMsg.textContent = "Confirm the transaction in your wallet. It's a 0 ETH soulbound badge mint.";
         const tx = await window.ethereum.request({
           method: "eth_sendTransaction",
           params: [{ from: account, to: CONTRACT_ADDRESS, value: "0x0", data: SEL.claim + pad64(tier) }]
         });
-        badgeMsg.innerHTML = "Badge minted ✓ <a href='" + BASE_CHAIN.blockExplorerUrls[0] + "/tx/" + tx + "' target='_blank' rel='noopener noreferrer'>View on Basescan</a>";
+        badgeMsg.innerHTML = "Badge minted successfully! ✓ <a href='" + BASE_CHAIN.blockExplorerUrls[0] + "/tx/" + tx + "' target='_blank' rel='noopener noreferrer'>View on Basescan</a>";
         badgeMsg.className = "ok";
         setTimeout(refreshBadges, 8000);
       } catch (err) {
-        badgeMsg.textContent = (err && err.code === 4001) ? "Transaction cancelled." : "Claim failed. Please try again.";
+        badgeMsg.textContent = (err && err.code === 4001) ? "Transaction canceled." : "Claim failed. Please try again.";
         badgeMsg.className = "err"; btn.disabled = false;
       }
     });
