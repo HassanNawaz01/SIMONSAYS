@@ -105,6 +105,12 @@
 
     /* ================= tabs ================= */
     document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => {
+      if (running && b.dataset.view !== "play") {
+        if (!confirm("Are you sure you want to quit the current game?")) {
+          return;
+        }
+        stopActiveGame();
+      }
       document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
       document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "view-" + b.dataset.view));
       if (b.dataset.view === "ranks") loadLeaderboard();
@@ -157,7 +163,12 @@
     }
 
     document.querySelectorAll(".mode").forEach(m => m.addEventListener("click", () => {
-      if (running) return;
+      if (running) {
+        if (!confirm("Are you sure you want to quit the current game?")) {
+          return;
+        }
+        stopActiveGame();
+      }
       modeKey = m.dataset.mode;
       document.querySelectorAll(".mode").forEach(x => x.classList.toggle("on", x === m));
       practiceNote.textContent = MODES[modeKey].mint ? "" : "Practice runs are not minted onchain. Just for training.";
@@ -178,7 +189,7 @@
         return;
       }
       
-      const wsUrl = window.location.protocol === "https:" ? "wss://" + window.location.host : "ws://localhost:8080";
+      const wsUrl = window.location.protocol === "https:" ? "wss://" + window.location.host : "ws://localhost:3000";
       wsClient = new WebSocket(wsUrl);
 
       wsClient.onopen = () => {
@@ -365,6 +376,29 @@
       sequence.push(Math.floor(Math.random() * 4));
       playSequence();
     }
+    function stopActiveGame() {
+      running = false;
+      accepting = false;
+      board.classList.remove("playing");
+      board.classList.add("locked");
+      $("modes").classList.remove("locked");
+      startBtn.disabled = false;
+      
+      if (wsClient) {
+        wsClient.close();
+        wsClient = null;
+      }
+      
+      const multiHud = document.getElementById("multiplayerHud");
+      if (multiHud) {
+        multiHud.style.display = "none";
+      }
+      
+      isQueueing = false;
+      updateModeUI();
+      setStatus("Game stopped.");
+    }
+
     async function startGame() {
       const selectedMode = MODES[modeKey];
       
