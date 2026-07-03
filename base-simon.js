@@ -358,7 +358,7 @@
       };
       
       wsClient.onerror = () => {
-        setStatus("Server error. Is the server running?");
+        setStatus("Connection failed. If the server was sleeping, it may take 1 min to wake up. Please try again.", "dead");
         isQueueing = false;
         running = false;
         startBtn.disabled = false;
