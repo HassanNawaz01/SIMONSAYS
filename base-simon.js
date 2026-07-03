@@ -113,14 +113,27 @@
     /* ================= difficulty modes ================= */
     const MODES = {
       practice: { label: "Practice", base: 620, step: 32, min: 220, mint: false, shuffle: false, id: null },
-      easy: { label: "Easy", base: 800, step: 22, min: 400, mint: true, shuffle: false, id: 0 },
-      normal: { label: "Normal", base: 620, step: 32, min: 220, mint: true, shuffle: false, id: 1 },
-      degen: { label: "Degen", base: 460, step: 44, min: 150, mint: true, shuffle: true, id: 2 }
+      onchain: { label: "Onchain", base: 620, step: 32, min: 220, mint: true, shuffle: false, id: 1 }
     };
-    let modeKey = "normal";
+    let modeKey = "onchain";
     const PAD_COLORS = ["var(--pad-1)", "var(--pad-2)", "var(--pad-3)", "var(--pad-4)"];
     function applyPadColors(order) { pads.forEach((p, i) => p.style.background = PAD_COLORS[order[i]]); }
     applyPadColors([0, 1, 2, 3]);
+
+    function updateModeUI() {
+      const isPractice = modeKey === "practice";
+      const hudEl = document.querySelector(".hud");
+      const chainStatBox = chainBestEl.closest(".stat");
+      if (chainStatBox && hudEl) {
+        if (isPractice) {
+          chainStatBox.style.display = "none";
+          hudEl.style.gridTemplateColumns = "repeat(2, 1fr)";
+        } else {
+          chainStatBox.style.display = "";
+          hudEl.style.gridTemplateColumns = "repeat(3, 1fr)";
+        }
+      }
+    }
 
     document.querySelectorAll(".mode").forEach(m => m.addEventListener("click", () => {
       if (running) return;
@@ -128,7 +141,9 @@
       document.querySelectorAll(".mode").forEach(x => x.classList.toggle("on", x === m));
       practiceNote.textContent = MODES[modeKey].mint ? "" : "Practice runs are not minted onchain. Just for training.";
       setStatus("Ready for " + MODES[modeKey].label + " mode");
+      updateModeUI();
     }));
+    updateModeUI();
 
     /* ================= sound ================= */
     let audioCtx = null;
@@ -148,7 +163,7 @@
 
     /* ================= game ================= */
     let sequence = [], playerStep = 0, level = 0, best = 0;
-    let accepting = false, running = false, lastScore = 0, runMode = MODES.normal;
+    let accepting = false, running = false, lastScore = 0, runMode = MODES.onchain;
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const speed = () => Math.max(runMode.min, runMode.base - level * runMode.step);
     function setStatus(t, c) { statusEl.textContent = t; statusEl.className = c || ""; }
@@ -172,8 +187,17 @@
       sequence.push(Math.floor(Math.random() * 4));
       playSequence();
     }
-    function startGame() {
-      runMode = MODES[modeKey];
+    async function startGame() {
+      const selectedMode = MODES[modeKey];
+      if (selectedMode.mint && !account) {
+        setStatus("Connect wallet to play Onchain mode!", "dead");
+        await connect();
+        if (!account) {
+          setStatus("Please connect your wallet to start.");
+          return;
+        }
+      }
+      runMode = selectedMode;
       sequence = []; level = 0; running = true;
       board.classList.add("playing");
       $("modes").classList.add("locked");
@@ -404,7 +428,7 @@
         lbTable.innerHTML = top.map((p, i) => {
           const me = account && p.addr.toLowerCase() === account.toLowerCase();
           const chip = p.mode === null ? "" :
-            '<span class="chip m' + p.mode + '">' + ["EASY", "NORMAL", "DEGEN"][p.mode] + '</span>';
+            '<span class="chip m' + p.mode + '">' + ["EASY", "ONCHAIN", "DEGEN"][p.mode] + '</span>';
           return '<div class="lb-row' + (i < 3 ? ' top' + (i + 1) : '') + (me ? ' me' : '') + '" data-addr="' + p.addr + '">'
             + '<span class="rank">#' + (i + 1) + '</span>'
             + '<span class="who">' + short(p.addr) + '</span>'
