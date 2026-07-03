@@ -221,7 +221,8 @@
       }
       
       const params = new URLSearchParams(window.location.search);
-      const wsUrl = params.get("ws") || "ws://localhost:3000";
+      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      const wsUrl = params.get("ws") || (isLocal ? "ws://localhost:3000" : "wss://simonsays-ayuz.onrender.com");
       wsClient = new WebSocket(wsUrl);
 
       wsClient.onopen = () => {
