@@ -6,17 +6,19 @@
   "scripts": {
     "start": "node server.js",
     "compile": "hardhat compile",
+    "deploy:score": "node scripts/deploy.js",
     "deploy:escrow": "node scripts/deploy-escrow.js",
     "stake:allow": "node scripts/set-allowed-stake.js",
     "settle:recovery": "node scripts/settle-recovery.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "hardhat compile && node --test --test-concurrency=1",
+    "test:server": "node --test --test-concurrency=1 test/server.test.js",
+    "test:escrow": "hardhat compile && node --test --test-concurrency=1 test/escrow.test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "hardhat": "^3.9.1"
   },
   "dependencies": {

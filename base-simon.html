@@ -9,11 +9,12 @@
   SECURITY: This page only connects to the 1v1 match server.
   No external scripts, no CDNs, no fonts, no analytics, no RPC fetches.
   Every chain interaction goes through the user's own wallet (window.ethereum).
+  Paid matchmaking also uses a gas-free wallet ownership signature.
   The CSP below enforces these limits at the browser level.
-  The only signable actions are two 0-value calls: mintScore() and claimBadge().
+  Paid 1v1 additionally uses explicit escrow deposit, settlement, refund, and withdrawal calls.
   -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src 'self' ws://127.0.0.1:3000 ws://localhost:3000 https://simonsays-ayuz.onrender.com wss://simonsays-ayuz.onrender.com;">
+    content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:* https://simonsays-ayuz.onrender.com wss://simonsays-ayuz.onrender.com; base-uri 'none'; form-action 'none'; object-src 'none';">
   <title>Simon on Base</title>
   <link rel="stylesheet" href="base-simon.css?v=4">
 </head>
@@ -134,8 +135,8 @@
 
       <div class="safe">
         <div class="dot"></div>
-        <div><b style="color:#fff">Wallet-safe by design.</b> This app only reads your wallet address. There are no
-          token approvals and no spending permissions. Free games only use zero-value contract calls. Paid 1v1 games
+        <div><b style="color:#fff">Wallet-safe by design.</b> This app reads your wallet address, and paid matchmaking asks for a gas-free ownership signature. There are no
+          token approvals or spending permissions. Free games only use zero-value contract calls. Paid 1v1 games
           use an escrow deposit and a separate reward withdrawal, so failed reward claims can be retried later.</div>
       </div>
     </section>
@@ -238,7 +239,7 @@
     </div>
   </div>
 
-  <script src="base-simon.js?v=13"></script>
+  <script src="base-simon.js?v=18"></script>
 </body>
 
 </html>

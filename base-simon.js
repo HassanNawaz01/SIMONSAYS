@@ -13,6 +13,7 @@
     const SEL = {
       mint: "0x08142c10", // mintScore(uint256,uint8)
       mintVerified: "0x135b34bd", // mintVerifiedScore(uint256,uint8,bytes32,bytes)
+      scoreSigner: "0x5b7633d0", // signerAddress()
       stakeDeposit: "0xd954863c", // deposit(bytes32,address,uint256)
       stakeSettle: "0x1369b2b4", // settle(bytes32,address,bytes)
       stakeRefundExpired: "0xcc3e049b", // refundExpired(bytes32)
@@ -91,6 +92,7 @@
       };
     })();
     const utf8 = s => new TextEncoder().encode(s);
+    const utf8Hex = s => "0x" + [...utf8(s)].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const hexBytes = h => { const a = new Uint8Array(h.length / 2); for (let i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return a; };
     function namehash(name) {
       let node = "0".repeat(64);
@@ -232,6 +234,7 @@
         selectedStakeWei = button.dataset.stake || "0";
         stakeOptions.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === button));
         selectedStakeLabel.textContent = stakeLabel(selectedStakeWei);
+        renderQueue(queuePlayers);
         updateModeUI();
       });
     });
@@ -285,19 +288,34 @@
 
       const visiblePlayers = players.filter((p) => String(p.stakeWei || "0") === String(selectedStakeWei));
       queueCount.textContent = visiblePlayers.length + (visiblePlayers.length === 1 ? " online" : " online");
+      queueList.replaceChildren();
       if (!visiblePlayers.length) {
-        queueList.innerHTML = '<div class="queue-empty">No players waiting for ' + stakeLabel(selectedStakeWei) + ' yet.</div>';
+        const empty = document.createElement("div");
+        empty.className = "queue-empty";
+        empty.textContent = "No players waiting for " + stakeLabel(selectedStakeWei) + " yet.";
+        queueList.append(empty);
         return;
       }
 
-      queueList.innerHTML = visiblePlayers.map((p) => {
+      visiblePlayers.forEach((p) => {
+        if (!addressReady(p.address)) return;
         const me = account && p.address && p.address.toLowerCase() === account.toLowerCase();
-        return '<div class="queue-player" data-address="' + p.address + '">' +
-          '<span class="who">' + (me ? "You" : playerLabel(p.address)) + '</span>' +
-          '<span class="amount">' + stakeLabel(p.stakeWei) + '</span>' +
-          '<span class="state">' + (me ? "waiting" : "online") + '</span>' +
-        '</div>';
-      }).join("");
+        const row = document.createElement("div");
+        row.className = "queue-player";
+        row.dataset.address = p.address;
+
+        const who = document.createElement("span");
+        who.className = "who";
+        who.textContent = me ? "You" : playerLabel(p.address);
+        const amount = document.createElement("span");
+        amount.className = "amount";
+        amount.textContent = stakeLabel(p.stakeWei);
+        const state = document.createElement("span");
+        state.className = "state";
+        state.textContent = me ? "waiting" : "online";
+        row.append(who, amount, state);
+        queueList.append(row);
+      });
 
       queueList.querySelectorAll(".queue-player").forEach((row) => {
         const addr = row.dataset.address;
@@ -489,9 +507,13 @@
     }
 
     async function fetchServerSettlement(matchId) {
-      if (!matchId || !location.origin.startsWith("http")) return null;
+      if (!matchId) return null;
       try {
-        const res = await fetch("/api/settlement?matchId=" + encodeURIComponent(matchId), { cache: "no-store" });
+        const serverOrigin = wsToHttpUrl(resolveWsUrl());
+        if (!serverOrigin) return null;
+        const endpoint = new URL("/api/settlement", serverOrigin);
+        endpoint.searchParams.set("matchId", matchId);
+        const res = await fetch(endpoint, { cache: "no-store" });
         if (!res.ok) return null;
         const data = await res.json();
         return data && data.ok ? data.settlement : null;
@@ -521,11 +543,8 @@
           if (!match || match.settled || !(match.player1Deposited && match.player2Deposited)) continue;
           const settlement = await fetchServerSettlement(matchId);
           if (!settlement || !settlement.signature) continue;
-          const winner = String(settlement.winner || "").toLowerCase();
-          if (winner === account.toLowerCase() || winner === "0x0000000000000000000000000000000000000000") {
-            saveSettlement(settlement);
-            return settlement;
-          }
+          saveSettlement(settlement);
+          return settlement;
         }
       } catch (e) { }
       return null;
@@ -564,9 +583,9 @@
         } else if (lastSettlement || recoveredSettlement) {
           pendingRewardMsg.textContent = "Paid match is funded. Settle the reward first, then claim it here.";
         } else if (refundable) {
-          pendingRewardMsg.textContent = "A paid match did not start. Refund the stake, then claim it here.";
+          pendingRewardMsg.textContent = "A paid match did not start. Refund the stake, then claim it here. The current contract's deposit fee is not refundable.";
         } else if (pendingRefunds.length) {
-          pendingRewardMsg.textContent = "A paid match did not start. Refund unlocks in " + refundWaitText(pendingRefunds[0]) + ".";
+          pendingRewardMsg.textContent = "A paid match did not start. Refund unlocks in " + refundWaitText(pendingRefunds[0]) + ". The current contract's deposit fee is not refundable.";
         } else {
           pendingRewardMsg.textContent = "No pending reward right now.";
         }
@@ -730,10 +749,9 @@
     function resolveWsUrl() {
       const params = new URLSearchParams(window.location.search);
       const override = params.get("ws");
-      if (override) return override;
-
       const host = window.location.hostname;
       const isLocal = !host || host === "localhost" || host === "127.0.0.1";
+      if (override && isLocal && /^wss?:\/\//i.test(override)) return override;
       if (isLocal && window.location.host) {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         return protocol + "//" + window.location.host;
@@ -836,7 +854,11 @@
 
         if (msg.type === "error") {
           setStatus(msg.message || "Server error.", "dead");
-          if (/expired|cancelled|deposit|escrow/i.test(msg.message || "")) {
+          if (/authentication/i.test(msg.message || "")) {
+            isQueueing = false;
+            startBtn.disabled = false;
+            updateModeUI();
+          } else if (/expired|cancelled|deposit|escrow/i.test(msg.message || "")) {
             if (/expired/i.test(msg.message || "")) {
               hideReadyPrompt();
               isQueueing = false;
@@ -852,6 +874,40 @@
 
         else if (msg.type === "queue_update") {
           renderQueue(msg.players || []);
+        }
+
+        else if (msg.type === "paid_auth_challenge") {
+          if (!account || !isPaidStake(selectedStakeWei) || typeof msg.message !== "string" || msg.message.length > 2048) {
+            setStatus("Paid wallet authentication failed.", "dead");
+            startBtn.disabled = false;
+            return;
+          }
+          try {
+            setStatus("Confirm the gas-free matchmaking signature in your wallet.", "watch");
+            const signature = await window.ethereum.request({
+              method: "personal_sign",
+              params: [utf8Hex(msg.message), account]
+            });
+            if (socket !== wsClient || socket.readyState !== WebSocket.OPEN) return;
+            socket.send(JSON.stringify({ type: "paid_auth_response", signature }));
+            setStatus("Wallet verified. Joining paid queue...", "watch");
+          } catch (error) {
+            setStatus(error && error.code === 4001 ? "Wallet verification cancelled." : "Wallet verification failed.", "dead");
+            startBtn.disabled = false;
+          }
+        }
+
+        else if (msg.type === "paid_auth_ok") {
+          if (!account || String(msg.playerAddress || "").toLowerCase() !== account.toLowerCase()) {
+            setStatus("Paid wallet authentication did not match the connected wallet.", "dead");
+            startBtn.disabled = false;
+            return;
+          }
+          socket.send(JSON.stringify({
+            type: "1v1_join",
+            playerAddress: account,
+            stakeWei: selectedStakeWei
+          }));
         }
 
         else if (msg.type === "queue_status" && msg.status === "queued") {
@@ -995,17 +1051,15 @@
             : (isPaidStake(msg.stakeWei) ? await fetchServerSettlement(msg.matchId) : null);
 
           if (paidSettlement && paidSettlement.signature && paidSettlement.winner) {
-            if (msg.result === "win" || msg.result === "tie") {
-              saveSettlement({
-                matchId: msg.matchId,
-                winner: paidSettlement.winner,
-                signature: paidSettlement.signature,
-                stakeWei: msg.stakeWei
-              });
-              mintMsg.textContent = "Paid match ended. " + paidBreakdown(msg.stakeWei) + " Settle the reward, then claim it from Pending reward.";
-            } else {
-              mintMsg.textContent = "Paid match ended. " + paidBreakdown(msg.stakeWei) + " Opponent can settle the reward.";
-            }
+            saveSettlement({
+              matchId: msg.matchId,
+              winner: paidSettlement.winner,
+              signature: paidSettlement.signature,
+              stakeWei: msg.stakeWei
+            });
+            mintMsg.textContent = msg.result === "lose"
+              ? "Paid match ended. You can submit the signed result; the reward still goes only to the winner."
+              : "Paid match ended. " + paidBreakdown(msg.stakeWei) + " Settle the reward, then claim it from Pending reward.";
           } else if (isPaidStake(msg.stakeWei)) {
             mintMsg.textContent = "Paid match ended, but settlement was not ready. Open 1v1 Pending reward to retry.";
             mintMsg.className = "err";
@@ -1145,11 +1199,15 @@
           setStatus("Connecting to server...");
           startBtn.disabled = true;
           connectWS(() => {
-            wsClient.send(JSON.stringify({
-              type: "1v1_join",
-              playerAddress: account,
-              stakeWei: selectedStakeWei
-            }));
+            if (isPaidStake(selectedStakeWei)) {
+              wsClient.send(JSON.stringify({ type: "paid_auth_request", playerAddress: account }));
+            } else {
+              wsClient.send(JSON.stringify({
+                type: "1v1_join",
+                playerAddress: account,
+                stakeWei: selectedStakeWei
+              }));
+            }
           });
         }
         return;
@@ -1237,6 +1295,16 @@
     const word = (hex, i) => hex.slice(2 + i * 64, 2 + (i + 1) * 64);
     const ethCall = (to, data) => window.ethereum.request({ method: "eth_call", params: [{ to, data }, "latest"] });
 
+    async function verifiedScoreReady() {
+      if (!contractReady()) return false;
+      try {
+        const raw = await ethCall(CONTRACT_ADDRESS, SEL.scoreSigner);
+        return Boolean(raw && raw !== "0x" && raw.length >= 66 && BigInt(raw) !== 0n);
+      } catch {
+        return false;
+      }
+    }
+
     async function ensureBase() {
       try {
         await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: BASE_CHAIN.chainId }] });
@@ -1302,6 +1370,12 @@
         
         let data;
         if (runMode === MODES.multiplayer) {
+          if (!(await verifiedScoreReady())) {
+            mintMsg.textContent = "Verified 1v1 score contract is not deployed yet. Paid escrow reward is separate and remains claimable.";
+            mintMsg.className = "err";
+            mintBtn.disabled = false;
+            return;
+          }
           if (!lastSignature || !lastMatchId) {
             mintMsg.textContent = "Signature or Match ID missing from server.";
             mintMsg.className = "err";
@@ -1330,7 +1404,12 @@
     mintBtn.addEventListener("click", mint);
     if (window.ethereum) {
       window.ethereum.on?.("accountsChanged", accs => {
-        account = accs[0] || null;
+        const nextAccount = accs[0] || null;
+        if (account && nextAccount && account.toLowerCase() !== nextAccount.toLowerCase() &&
+            (running || isQueueing || pendingReadyId)) {
+          stopActiveGame();
+        }
+        account = nextAccount;
         walletBtn.textContent = account ? short(account) : "Connect wallet";
         walletBtn.classList.toggle("connected", !!account);
         refreshOnchainBest(); refreshGlobal(); loadLeaderboard(); refreshBadges(); refreshPendingReward();

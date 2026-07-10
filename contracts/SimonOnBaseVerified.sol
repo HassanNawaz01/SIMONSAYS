@@ -10,7 +10,7 @@ contract SimonOnBaseVerified {
     /* ───────────────────────── owner & signer ───────────────── */
     address public owner;
     address public signerAddress;
-    mapping(bytes32 => bool) public usedMatches; // Prevent replay attacks
+    mapping(bytes32 => mapping(address => bool)) public usedMatches;
 
     event SignerUpdated(address indexed newSigner);
 
@@ -38,11 +38,13 @@ contract SimonOnBaseVerified {
     event ScoreMinted(address indexed player, uint256 score, uint8 mode, uint256 indexed week, uint256 newBest);
 
     constructor(address _signerAddress) {
+        require(_signerAddress != address(0), "bad signer");
         owner = msg.sender;
         signerAddress = _signerAddress;
     }
 
     function setSigner(address _signerAddress) external onlyOwner {
+        require(_signerAddress != address(0), "bad signer");
         signerAddress = _signerAddress;
         emit SignerUpdated(_signerAddress);
     }
@@ -59,16 +61,16 @@ contract SimonOnBaseVerified {
 
     /// Record a finished 1v1 verified game using server signature.
     function mintVerifiedScore(uint256 score, uint8 mode, bytes32 matchId, bytes memory signature) external {
-        require(!usedMatches[matchId], "match already minted");
+        require(!usedMatches[matchId][msg.sender], "match already minted");
         require(mode <= 2, "bad mode");
 
-        bytes32 messageHash = keccak256(abi.encodePacked(msg.sender, score, mode, matchId));
+        bytes32 messageHash = keccak256(abi.encode(address(this), block.chainid, msg.sender, score, mode, matchId));
         bytes32 ethSignedMessageHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
 
         address recovered = recoverSigner(ethSignedMessageHash, signature);
         require(recovered == signerAddress, "invalid signature");
 
-        usedMatches[matchId] = true;
+        usedMatches[matchId][msg.sender] = true;
         _recordScore(msg.sender, score, mode);
     }
 

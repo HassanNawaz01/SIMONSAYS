@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { randomInt } from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { ethers } from "ethers";
 
@@ -23,71 +24,144 @@ function loadEnvFile() {
 
 loadEnvFile();
 
-// Development signer private key (Hardhat account #0)
-// Signer Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-const SIGNER_PRIVATE_KEY = process.env.SIGNER_PRIVATE_KEY || "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const wallet = new ethers.Wallet(SIGNER_PRIVATE_KEY);
+const SIGNER_PRIVATE_KEY = process.env.SIGNER_PRIVATE_KEY;
+if (!SIGNER_PRIVATE_KEY) {
+  throw new Error("SIGNER_PRIVATE_KEY is required. Refusing to start without the configured onchain signer.");
+}
+
+let wallet;
+try {
+  wallet = new ethers.Wallet(SIGNER_PRIVATE_KEY);
+} catch {
+  throw new Error("SIGNER_PRIVATE_KEY is invalid.");
+}
 console.log(`Simon says server started. Signer address: ${wallet.address}`);
 
 const STAKE_ESCROW_ADDRESS = process.env.STAKE_ESCROW_ADDRESS || "0x654B8495765f8Db94f4880c20F5c7E5f8a9CFe90";
+const SCORE_CONTRACT_ADDRESS = process.env.SCORE_CONTRACT_ADDRESS || "0xd376DA21BDCDD1338C2283488d592880F25F09f1";
 const BASE_RPC_URL = process.env.BASE_RPC_URL || "https://mainnet.base.org";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const stakeProvider = new ethers.JsonRpcProvider(BASE_RPC_URL);
 const stakeEscrow = ethers.isAddress(STAKE_ESCROW_ADDRESS)
   ? new ethers.Contract(STAKE_ESCROW_ADDRESS, [
       "function hasDeposit(bytes32 matchId, address player) view returns (bool)",
-      "function matches(bytes32 matchId) view returns (address player1, address player2, uint256 stake, uint64 createdAt, bool player1Deposited, bool player2Deposited, bool settled)"
+      "function matches(bytes32 matchId) view returns (address player1, address player2, uint256 stake, uint64 createdAt, bool player1Deposited, bool player2Deposited, bool settled)",
+      "function signerAddress() view returns (address)",
+      "function allowedStake(uint256 stake) view returns (bool)"
     ], stakeProvider)
   : null;
+let paidEscrowConfigPromise = null;
+
+function ensurePaidEscrowConfigured(stakeWei) {
+  if (!stakeEscrow) return Promise.reject(new Error("Paid escrow contract is not configured."));
+
+  if (!paidEscrowConfigPromise) {
+    paidEscrowConfigPromise = (async () => {
+      const [network, code, configuredSigner] = await Promise.all([
+        stakeProvider.getNetwork(),
+        stakeProvider.getCode(STAKE_ESCROW_ADDRESS),
+        stakeEscrow.signerAddress()
+      ]);
+      if (network.chainId !== 8453n) throw new Error("Escrow RPC is not Base mainnet.");
+      if (code === "0x") throw new Error("Escrow contract is not deployed.");
+      if (configuredSigner.toLowerCase() !== wallet.address.toLowerCase()) {
+        throw new Error("Server signer does not match the escrow contract signer.");
+      }
+      return true;
+    })().catch((error) => {
+      paidEscrowConfigPromise = null;
+      throw error;
+    });
+  }
+
+  return paidEscrowConfigPromise.then(async () => {
+    if (!(await stakeEscrow.allowedStake(stakeWei))) throw new Error("Stake is disabled onchain.");
+    return true;
+  });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml"
+  ".js": "application/javascript; charset=utf-8"
 };
+const PUBLIC_FILES = new Set(["base-simon.html", "base-simon.css", "base-simon.js"]);
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self' ws://127.0.0.1:* ws://localhost:* https://simonsays-ayuz.onrender.com wss://simonsays-ayuz.onrender.com",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'"
+].join("; ");
+
+function setSecurityHeaders(res) {
+  res.setHeader("Content-Security-Policy", CSP);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+}
 
 async function serveStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
-  const pathname = decodeURIComponent(url.pathname === "/" ? "/base-simon.html" : url.pathname);
-  const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(__dirname, safePath);
+  let filename;
+  try {
+    filename = decodeURIComponent(url.pathname === "/" ? "base-simon.html" : url.pathname.slice(1));
+  } catch {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Bad request\n");
+    return;
+  }
 
-  if (!filePath.startsWith(__dirname)) {
-    res.writeHead(403, { "Content-Type": "text/plain" });
-    res.end("Forbidden\n");
+  if (!PUBLIC_FILES.has(filename)) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Not found\n");
     return;
   }
 
   try {
+    const filePath = path.join(__dirname, filename);
     const data = await fs.readFile(filePath);
     const type = STATIC_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
-    res.writeHead(200, { "Content-Type": type });
-    res.end(data);
-  } catch (err) {
-    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.writeHead(200, {
+      "Content-Type": type,
+      "Cache-Control": filename.endsWith(".html") ? "no-cache" : "public, max-age=3600"
+    });
+    res.end(req.method === "HEAD" ? undefined : data);
+  } catch {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("Not found\n");
   }
 }
 
 const server = http.createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  setSecurityHeaders(res);
   const url = new URL(req.url || "/", "http://localhost");
 
   if (req.method === "OPTIONS") {
+    if (url.pathname === "/api/settlement" || url.pathname === "/health") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
     res.writeHead(204);
     res.end();
     return;
   }
 
   if (url.pathname === "/health") {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { "Content-Type": "application/json", "Allow": "GET, HEAD, OPTIONS" });
+      res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "no-store");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       ok: true,
@@ -100,6 +174,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/api/settlement") {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { "Content-Type": "application/json", "Allow": "GET, HEAD, OPTIONS" });
+      res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "no-store");
     const matchId = String(url.searchParams.get("matchId") || "").toLowerCase();
     if (!/^0x[0-9a-f]{64}$/.test(matchId)) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -128,7 +209,11 @@ const server = http.createServer(async (req, res) => {
   res.end("Method not allowed\n");
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 8 * 1024,
+  perMessageDeflate: false
+});
 
 const ALLOWED_STAKES = new Set([
   "0",
@@ -139,8 +224,15 @@ const ALLOWED_STAKES = new Set([
 ]);
 const FREE_READY_TIMEOUT_MS = 30000;
 const PAID_READY_TIMEOUT_MS = 180000;
+const MAX_CLIENTS = 500;
+const MAX_CONNECTIONS_PER_IP = 20;
+const MAX_MESSAGES_PER_SECOND = 40;
+const MIN_CLICK_INTERVAL_MS = 70;
+const MAX_EARLY_CLICKS = 20;
+const PAID_AUTH_TTL_MS = 5 * 60 * 1000;
 
 let clients = new Set();
+let connectionsByIp = new Map();
 let queue = []; // Array of { ws, playerAddress, stakeWei, joinedAt }
 let pendingMatches = new Map(); // readyId => PendingMatch
 let activeMatches = new Map(); // matchId => MatchState
@@ -148,6 +240,31 @@ let completedSettlements = new Map(); // matchId => signed paid settlement
 
 function generateMatchId() {
   return ethers.hexlify(ethers.randomBytes(32));
+}
+
+function randomPadIndex() {
+  return randomInt(4);
+}
+
+function clientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket.remoteAddress || "unknown";
+}
+
+function consumeMessageBudget(ws) {
+  const now = Date.now();
+  if (!ws.messageWindowStartedAt || now - ws.messageWindowStartedAt >= 1000) {
+    ws.messageWindowStartedAt = now;
+    ws.messageCount = 0;
+  }
+  ws.messageCount++;
+  return ws.messageCount <= MAX_MESSAGES_PER_SECOND;
+}
+
+function playbackDelayMs(player) {
+  const level = player.score + 1;
+  const speed = Math.max(220, 620 - level * 32);
+  return 650 + player.sequence.length * (speed + 140) - 150;
 }
 
 function broadcast(match, data) {
@@ -178,6 +295,24 @@ function findPendingBySocket(ws) {
     if (pending.p1.ws === ws || pending.p2.ws === ws) return pending;
   }
   return null;
+}
+
+function socketIsBusy(ws) {
+  return queue.some((p) => p.ws === ws) || Boolean(findPendingBySocket(ws)) || Boolean(findMatchBySocket(ws));
+}
+
+function addressIsBusy(address, exceptWs = null) {
+  const key = address.toLowerCase();
+  if (queue.some((p) => p.ws !== exceptWs && p.playerAddress.toLowerCase() === key)) return true;
+  for (const pending of pendingMatches.values()) {
+    if ((pending.p1.ws !== exceptWs && pending.p1.playerAddress.toLowerCase() === key) ||
+        (pending.p2.ws !== exceptWs && pending.p2.playerAddress.toLowerCase() === key)) return true;
+  }
+  for (const match of activeMatches.values()) {
+    if ((match.p1.ws !== exceptWs && match.p1.address.toLowerCase() === key) ||
+        (match.p2.ws !== exceptWs && match.p2.address.toLowerCase() === key)) return true;
+  }
+  return false;
 }
 
 function queuePayload() {
@@ -220,7 +355,7 @@ function startPendingMatch(readyId) {
   pendingMatches.delete(readyId);
 
   const matchId = readyId;
-  const initialSequence = [Math.floor(Math.random() * 4)];
+  const initialSequence = [randomPadIndex()];
   const match = {
     matchId,
     stakeWei: pending.stakeWei,
@@ -231,7 +366,10 @@ function startPendingMatch(readyId) {
       score: 0,
       sequence: [...initialSequence],
       step: 0,
-      failed: false
+      failed: false,
+      acceptClicksAt: 0,
+      lastClickAt: 0,
+      earlyClicks: 0
     },
     p2: {
       ws: pending.p2.ws,
@@ -239,7 +377,10 @@ function startPendingMatch(readyId) {
       score: 0,
       sequence: [...initialSequence],
       step: 0,
-      failed: false
+      failed: false,
+      acceptClicksAt: 0,
+      lastClickAt: 0,
+      earlyClicks: 0
     },
     forfeiter: null,
     started: false,
@@ -285,6 +426,9 @@ function startPendingMatch(readyId) {
     clearInterval(match.countdownInterval);
     match.countdownInterval = null;
     match.started = true;
+    const acceptClicksAt = Date.now() + playbackDelayMs(match.p1);
+    match.p1.acceptClicksAt = acceptClicksAt;
+    match.p2.acceptClicksAt = acceptClicksAt;
     broadcast(match, { type: "match_go", timeLeft: match.timeLeft });
     console.log(`Match started: ${matchId}`);
 
@@ -323,6 +467,7 @@ function tryCreateReadyPair() {
         p1,
         p2,
         ready: new Set(),
+        verifying: new Set(),
         readyTimer: setTimeout(() => cancelPending(readyId, "ready_timeout"), readyTimeoutMs)
       };
 
@@ -369,10 +514,11 @@ async function endMatch(matchId, reason) {
       : ZERO_ADDRESS;
 
   const signScore = async (playerAddr, score) => {
-    const messageHash = ethers.solidityPackedKeccak256(
-      ["address", "uint256", "uint8", "bytes32"],
-      [playerAddr, score, 1, matchId]
+    const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "uint256", "address", "uint256", "uint8", "bytes32"],
+      [SCORE_CONTRACT_ADDRESS, 8453n, playerAddr, score, 1, matchId]
     );
+    const messageHash = ethers.keccak256(encoded);
     return await wallet.signMessage(ethers.getBytes(messageHash));
   };
 
@@ -427,7 +573,7 @@ async function endMatch(matchId, reason) {
 
 async function verifyPaidDeposit(pending, ws, txHash) {
   if (pending.stakeWei === "0") return true;
-  if (!stakeEscrow) throw new Error("Paid escrow contract is not configured on the server.");
+  await ensurePaidEscrowConfigured(pending.stakeWei);
 
   const player = pending.p1.ws === ws ? pending.p1.playerAddress : pending.p2.playerAddress;
   const receipt = await stakeProvider.waitForTransaction(txHash, 1, 90000);
@@ -438,19 +584,48 @@ async function verifyPaidDeposit(pending, ws, txHash) {
   return true;
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
+  const requestOrigin = String(req.headers.origin || "non-browser");
+  const ipConnections = connectionsByIp.get(ip) || 0;
+  if (clients.size >= MAX_CLIENTS || ipConnections >= MAX_CONNECTIONS_PER_IP) {
+    ws.close(1013, "Server busy");
+    return;
+  }
+
   let playerAddress = null;
+  connectionsByIp.set(ip, ipConnections + 1);
   clients.add(ws);
   sendJson(ws, { type: "queue_update", players: queuePayload() });
 
   ws.on("message", async (message) => {
+    if (!consumeMessageBudget(ws)) {
+      ws.close(1008, "Rate limit exceeded");
+      return;
+    }
+
     try {
       const data = JSON.parse(message);
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        sendJson(ws, { type: "error", message: "Invalid message" });
+        return;
+      }
 
       if (data.type === "1v1_join") {
-        playerAddress = data.playerAddress;
-        if (!playerAddress || !ethers.isAddress(playerAddress)) {
+        const requestedAddress = data.playerAddress;
+        if (!requestedAddress || !ethers.isAddress(requestedAddress)) {
           sendJson(ws, { type: "error", message: "Invalid wallet address" });
+          return;
+        }
+
+        if (socketIsBusy(ws)) {
+          sendJson(ws, { type: "queue_status", status: "Already searching or playing" });
+          return;
+        }
+
+        const normalizedAddress = ethers.getAddress(requestedAddress);
+        if (addressIsBusy(normalizedAddress, ws)) {
+          sendJson(ws, { type: "error", message: "This wallet is already searching or playing." });
           return;
         }
 
@@ -460,20 +635,81 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        cleanupQueue();
+        if (stakeWei !== "0") {
+          if (!ws.authenticatedAddress || ws.authenticatedAddress.toLowerCase() !== normalizedAddress.toLowerCase()) {
+            sendJson(ws, { type: "error", message: "Paid matchmaking requires wallet authentication first." });
+            return;
+          }
+          if (ws.joiningPaid) {
+            sendJson(ws, { type: "queue_status", status: "Checking paid mode" });
+            return;
+          }
+          ws.joiningPaid = true;
+          try {
+            await ensurePaidEscrowConfigured(stakeWei);
+          } catch (error) {
+            console.error("Paid mode configuration check failed:", error.message || error);
+            sendJson(ws, { type: "error", message: "Paid mode is temporarily unavailable. No deposit was requested." });
+            return;
+          } finally {
+            ws.joiningPaid = false;
+          }
 
-        // Check if already in queue
-        if (queue.some(p => p.playerAddress.toLowerCase() === playerAddress.toLowerCase())) {
-          sendJson(ws, { type: "queue_status", status: "Already in queue" });
-          return;
+          if (socketIsBusy(ws) || addressIsBusy(normalizedAddress, ws)) {
+            sendJson(ws, { type: "error", message: "This wallet is already searching or playing." });
+            return;
+          }
         }
 
+        cleanupQueue();
+
+        playerAddress = normalizedAddress;
         console.log(`Player joined queue: ${playerAddress} stake=${stakeWei}`);
         queue.push({ ws, playerAddress, stakeWei, joinedAt: Date.now() });
         sendJson(ws, { type: "queue_status", status: "queued" });
         broadcastQueue();
 
         tryCreateReadyPair();
+      }
+
+      else if (data.type === "paid_auth_request") {
+        const requestedAddress = data.playerAddress;
+        if (!requestedAddress || !ethers.isAddress(requestedAddress) || socketIsBusy(ws)) {
+          sendJson(ws, { type: "error", message: "Paid wallet authentication request is invalid." });
+          return;
+        }
+
+        const normalizedAddress = ethers.getAddress(requestedAddress);
+        const expiresAt = Date.now() + PAID_AUTH_TTL_MS;
+        const nonce = ethers.hexlify(ethers.randomBytes(24));
+        const authMessage = [
+          "Simon on Base paid matchmaking",
+          `Wallet: ${normalizedAddress}`,
+          `Origin: ${requestOrigin}`,
+          `Nonce: ${nonce}`,
+          `Expires: ${new Date(expiresAt).toISOString()}`,
+          "This signature does not authorize a transaction or token transfer."
+        ].join("\n");
+        ws.authChallenge = { address: normalizedAddress, message: authMessage, expiresAt };
+        sendJson(ws, { type: "paid_auth_challenge", message: authMessage, expiresAt });
+      }
+
+      else if (data.type === "paid_auth_response") {
+        const challenge = ws.authChallenge;
+        ws.authChallenge = null;
+        if (!challenge || Date.now() > challenge.expiresAt) {
+          sendJson(ws, { type: "error", message: "Paid wallet authentication expired. Please try again." });
+          return;
+        }
+
+        try {
+          const recovered = ethers.verifyMessage(challenge.message, String(data.signature || ""));
+          if (recovered.toLowerCase() !== challenge.address.toLowerCase()) throw new Error("wrong signer");
+          ws.authenticatedAddress = challenge.address;
+          sendJson(ws, { type: "paid_auth_ok", playerAddress: challenge.address });
+        } catch {
+          sendJson(ws, { type: "error", message: "Paid wallet authentication failed." });
+        }
       }
 
       else if (data.type === "1v1_leave") {
@@ -494,12 +730,18 @@ wss.on("connection", (ws) => {
           return;
         }
 
+        if (pending.ready.has(ws) || pending.verifying.has(ws)) {
+          sendJson(ws, { type: "ready_state", readyCount: pending.ready.size, message: "Ready already received. Waiting for opponent..." });
+          return;
+        }
+
         if (pending.stakeWei !== "0" && !/^0x[0-9a-fA-F]{64}$/.test(String(data.txHash || ""))) {
           sendJson(ws, { type: "error", message: "Paid matches require an escrow deposit transaction first." });
           return;
         }
 
         if (pending.stakeWei !== "0") {
+          pending.verifying.add(ws);
           try {
             sendJson(ws, { type: "ready_state", readyCount: pending.ready.size, message: "Verifying escrow deposit..." });
             await verifyPaidDeposit(pending, ws, String(data.txHash));
@@ -510,6 +752,8 @@ wss.on("connection", (ws) => {
           } catch (err) {
             sendJson(ws, { type: "error", message: err.message || "Could not verify escrow deposit." });
             return;
+          } finally {
+            pending.verifying.delete(ws);
           }
         }
 
@@ -534,7 +778,24 @@ wss.on("connection", (ws) => {
 
         if (!match.started || player.failed || match.timeLeft <= 0) return;
 
-        const clickedIndex = data.index;
+        const clickedIndex = Number(data.index);
+        if (!Number.isInteger(clickedIndex) || clickedIndex < 0 || clickedIndex > 3) return;
+
+        const now = Date.now();
+        if (now < player.acceptClicksAt) {
+          player.earlyClicks++;
+          if (player.earlyClicks > MAX_EARLY_CLICKS) {
+            player.failed = true;
+            match.forfeiter = player.address;
+            sendJson(player.ws, { type: "player_failed", score: player.score, reason: "invalid_timing" });
+            sendJson(opponent.ws, { type: "opponent_failed", score: player.score });
+            endMatch(matchId, "invalid_timing");
+          }
+          return;
+        }
+        if (now - player.lastClickAt < MIN_CLICK_INTERVAL_MS) return;
+        player.lastClickAt = now;
+
         const expectedIndex = player.sequence[player.step];
 
         if (clickedIndex === expectedIndex) {
@@ -543,7 +804,10 @@ wss.on("connection", (ws) => {
           if (player.step === player.sequence.length) {
             player.step = 0;
             player.score++;
-            player.sequence.push(Math.floor(Math.random() * 4));
+            player.sequence.push(randomPadIndex());
+            player.acceptClicksAt = Date.now() + playbackDelayMs(player);
+            player.lastClickAt = 0;
+            player.earlyClicks = 0;
 
             // Send next sequence to the player
             sendJson(player.ws, {
@@ -579,6 +843,9 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     clients.delete(ws);
+    const remainingForIp = Math.max(0, (connectionsByIp.get(ip) || 1) - 1);
+    if (remainingForIp === 0) connectionsByIp.delete(ip);
+    else connectionsByIp.set(ip, remainingForIp);
     removeFromQueue(ws);
 
     const pending = findPendingBySocket(ws);
