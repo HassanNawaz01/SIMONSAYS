@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src 'self' ws://127.0.0.1:3000 ws://localhost:3000 https://simonsays-ayuz.onrender.com wss://simonsays-ayuz.onrender.com;">
   <title>Simon on Base</title>
-  <link rel="stylesheet" href="base-simon.css">
+  <link rel="stylesheet" href="base-simon.css?v=4">
 </head>
 
 <body>
@@ -94,7 +94,40 @@
           </div>
 
           <p id="status">Pick a mode and press start</p>
+          <div class="stake-panel" id="stakePanel" hidden>
+            <div class="stake-head">
+              <span>Match entry</span>
+              <b id="selectedStakeLabel">Free</b>
+            </div>
+            <div class="stake-options" id="stakeOptions">
+              <button data-stake="0" class="on">Free</button>
+              <button data-stake="500000000000000">0.0005 ETH</button>
+              <button data-stake="1000000000000000">0.001 ETH</button>
+              <button data-stake="5000000000000000">0.005 ETH</button>
+              <button data-stake="10000000000000000">0.01 ETH</button>
+            </div>
+          </div>
           <button id="startBtn">Start game</button>
+          <div class="queue-panel" id="queuePanel" hidden>
+            <div class="queue-head">
+              <span>1v1 Queue</span>
+              <b id="queueCount">0 online</b>
+            </div>
+            <div class="queue-list" id="queueList">
+              <div class="queue-empty">No players waiting yet.</div>
+            </div>
+          </div>
+          <div class="reward-panel" id="rewardPanel" hidden>
+            <div>
+              <span>Pending reward</span>
+              <b id="pendingRewardAmount">0 ETH</b>
+              <small id="pendingRewardMsg">Claim failed or unclaimed rewards can be retried here.</small>
+            </div>
+            <div class="reward-actions">
+              <button id="claimRewardBtn" disabled>Claim</button>
+              <button id="refundStakeBtn" hidden>Refund stake</button>
+            </div>
+          </div>
           <p class="practice-note" id="practiceNote"></p>
         </div>
       </div>
@@ -102,9 +135,8 @@
       <div class="safe">
         <div class="dot"></div>
         <div><b style="color:#fff">Wallet-safe by design.</b> This app only reads your wallet address. There are no
-          token approvals, no message signatures, and no spending permissions required. The only transactions you ever
-          sign are two zero-value contract calls to mint a score or claim a badge. Badges are soulbound, meaning they
-          are permanently tied to your address and cannot be transferred.</div>
+          token approvals and no spending permissions. Free games only use zero-value contract calls. Paid 1v1 games
+          use an escrow deposit and a separate reward withdrawal, so failed reward claims can be retried later.</div>
       </div>
     </section>
 
@@ -175,6 +207,7 @@
       <div class="big" id="finalScore">0</div>
       <div class="sub" id="overSub">levels cleared</div>
       <button id="mintBtn">Mint score on Base</button>
+      <button id="settleRewardBtn" hidden>Settle paid reward</button>
       <button id="againBtn">Play again</button>
       <div id="mintMsg"></div>
     </div>
@@ -189,7 +222,23 @@
     </div>
   </div>
 
-  <script src="base-simon.js?v=3"></script>
+  <div class="overlay" id="readyOverlay">
+    <div class="card ready-card">
+      <h2>Match Found</h2>
+      <div class="ready-vs">
+        <span>You</span>
+        <b>vs</b>
+        <span id="readyOpponent">Opponent</span>
+      </div>
+      <p id="readyText">Are you ready to play?</p>
+      <div class="ready-actions">
+        <button id="readyAcceptBtn">Ready</button>
+        <button id="readyCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="base-simon.js?v=12"></script>
 </body>
 
 </html>
