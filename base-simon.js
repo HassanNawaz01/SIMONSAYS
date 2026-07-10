@@ -314,7 +314,7 @@
       const paid = isPaidStake(msg.stakeWei);
       readyOpponent.textContent = label;
       readyText.textContent = paid
-        ? "Paid match: " + stakeLabel(msg.stakeWei) + " each. " + paidBreakdown(msg.stakeWei)
+        ? "Paid match: " + stakeLabel(msg.stakeWei) + " each. " + paidBreakdown(msg.stakeWei) + " Deposit window: " + Math.floor((msg.expiresIn || 180) / 60) + " min."
         : "Are you ready to play? Waiting for both players.";
       readyAcceptBtn.disabled = false;
       readyCancelBtn.disabled = false;
@@ -836,6 +836,18 @@
 
         if (msg.type === "error") {
           setStatus(msg.message || "Server error.", "dead");
+          if (/expired|cancelled|deposit|escrow/i.test(msg.message || "")) {
+            if (/expired/i.test(msg.message || "")) {
+              hideReadyPrompt();
+              isQueueing = false;
+              startBtn.disabled = false;
+              updateModeUI();
+              refreshPendingReward();
+            } else if (readyOverlay.classList.contains("show")) {
+              readyAcceptBtn.disabled = false;
+              readyAcceptBtn.textContent = isPaidStake(pendingStakeWei) ? "Deposit & Ready" : "Ready";
+            }
+          }
         }
 
         else if (msg.type === "queue_update") {

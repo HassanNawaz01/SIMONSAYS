@@ -137,6 +137,8 @@ const ALLOWED_STAKES = new Set([
   "5000000000000000",
   "10000000000000000"
 ]);
+const FREE_READY_TIMEOUT_MS = 30000;
+const PAID_READY_TIMEOUT_MS = 180000;
 
 let clients = new Set();
 let queue = []; // Array of { ws, playerAddress, stakeWei, joinedAt }
@@ -314,18 +316,19 @@ function tryCreateReadyPair() {
       }
 
       const readyId = generateMatchId();
+      const readyTimeoutMs = stakeWei === "0" ? FREE_READY_TIMEOUT_MS : PAID_READY_TIMEOUT_MS;
       const pending = {
         readyId,
         stakeWei,
         p1,
         p2,
         ready: new Set(),
-        readyTimer: setTimeout(() => cancelPending(readyId, "ready_timeout"), 30000)
+        readyTimer: setTimeout(() => cancelPending(readyId, "ready_timeout"), readyTimeoutMs)
       };
 
       pendingMatches.set(readyId, pending);
-      sendJson(p1.ws, { type: "ready_check", readyId, opponent: p2.playerAddress, stakeWei, expiresIn: 30 });
-      sendJson(p2.ws, { type: "ready_check", readyId, opponent: p1.playerAddress, stakeWei, expiresIn: 30 });
+      sendJson(p1.ws, { type: "ready_check", readyId, opponent: p2.playerAddress, stakeWei, expiresIn: Math.floor(readyTimeoutMs / 1000) });
+      sendJson(p2.ws, { type: "ready_check", readyId, opponent: p1.playerAddress, stakeWei, expiresIn: Math.floor(readyTimeoutMs / 1000) });
     }
   }
 
@@ -481,7 +484,10 @@ wss.on("connection", (ws) => {
 
       else if (data.type === "1v1_ready") {
         const pending = pendingMatches.get(data.readyId);
-        if (!pending || (pending.p1.ws !== ws && pending.p2.ws !== ws)) return;
+        if (!pending || (pending.p1.ws !== ws && pending.p2.ws !== ws)) {
+          sendJson(ws, { type: "error", message: "Match expired. Please find another 1v1." });
+          return;
+        }
 
         if (!data.ready) {
           cancelPending(pending.readyId, "declined");
@@ -497,6 +503,10 @@ wss.on("connection", (ws) => {
           try {
             sendJson(ws, { type: "ready_state", readyCount: pending.ready.size, message: "Verifying escrow deposit..." });
             await verifyPaidDeposit(pending, ws, String(data.txHash));
+            if (pendingMatches.get(data.readyId) !== pending) {
+              sendJson(ws, { type: "error", message: "Match expired after deposit. Open Pending reward to refund or claim, then find another 1v1." });
+              return;
+            }
           } catch (err) {
             sendJson(ws, { type: "error", message: err.message || "Could not verify escrow deposit." });
             return;
