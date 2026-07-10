@@ -1,4 +1,7 @@
 import http from "http";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import { ethers } from "ethers";
 
@@ -8,9 +11,69 @@ const SIGNER_PRIVATE_KEY = process.env.SIGNER_PRIVATE_KEY || "0xac0974bec39a17e3
 const wallet = new ethers.Wallet(SIGNER_PRIVATE_KEY);
 console.log(`Simon says server started. Signer address: ${wallet.address}`);
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Simon 1v1 Server Running\n");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STATIC_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml"
+};
+
+async function serveStatic(req, res) {
+  const url = new URL(req.url || "/", "http://localhost");
+  const pathname = decodeURIComponent(url.pathname === "/" ? "/base-simon.html" : url.pathname);
+  const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  const filePath = path.join(__dirname, safePath);
+
+  if (!filePath.startsWith(__dirname)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Forbidden\n");
+    return;
+  }
+
+  try {
+    const data = await fs.readFile(filePath);
+    const type = STATIC_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+    res.writeHead(200, { "Content-Type": type });
+    res.end(data);
+  } catch (err) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not found\n");
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      queue: queue.length,
+      activeMatches: activeMatches.size
+    }));
+    return;
+  }
+
+  if (req.method === "GET" || req.method === "HEAD") {
+    await serveStatic(req, res);
+    return;
+  }
+
+  res.writeHead(405, { "Content-Type": "text/plain" });
+  res.end("Method not allowed\n");
 });
 
 const wss = new WebSocketServer({ server });
@@ -28,9 +91,25 @@ function broadcast(match, data) {
   if (match.p2.ws.readyState === WebSocket.OPEN) match.p2.ws.send(msg);
 }
 
+function sendJson(ws, data) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+function cleanupQueue() {
+  queue = queue.filter((p) => p.ws.readyState === WebSocket.OPEN);
+}
+
+function findMatchBySocket(ws) {
+  for (const match of activeMatches.values()) {
+    if (match.p1.ws === ws || match.p2.ws === ws) return match;
+  }
+  return null;
+}
+
 wss.on("connection", (ws) => {
   let playerAddress = null;
-  let currentMatchId = null;
 
   ws.on("message", async (message) => {
     try {
@@ -39,24 +118,31 @@ wss.on("connection", (ws) => {
       if (data.type === "1v1_join") {
         playerAddress = data.playerAddress;
         if (!playerAddress || !ethers.isAddress(playerAddress)) {
-          ws.send(JSON.stringify({ type: "error", message: "Invalid wallet address" }));
+          sendJson(ws, { type: "error", message: "Invalid wallet address" });
           return;
         }
 
+        cleanupQueue();
+
         // Check if already in queue
         if (queue.some(p => p.playerAddress.toLowerCase() === playerAddress.toLowerCase())) {
-          ws.send(JSON.stringify({ type: "queue_status", status: "Already in queue" }));
+          sendJson(ws, { type: "queue_status", status: "Already in queue" });
           return;
         }
 
         console.log(`Player joined queue: ${playerAddress}`);
         queue.push({ ws, playerAddress });
-        ws.send(JSON.stringify({ type: "queue_status", status: "queued" }));
+        sendJson(ws, { type: "queue_status", status: "queued" });
 
         // Matchmaking trigger
         if (queue.length >= 2) {
           const p1 = queue.shift();
           const p2 = queue.shift();
+
+          if (p1.ws.readyState !== WebSocket.OPEN || p2.ws.readyState !== WebSocket.OPEN) {
+            cleanupQueue();
+            return;
+          }
 
           const matchId = generateMatchId();
           const initialSequence = [Math.floor(Math.random() * 4)];
@@ -80,27 +166,28 @@ wss.on("connection", (ws) => {
               step: 0,
               failed: false
             },
+            forfeiter: null,
             timerInterval: null
           };
 
           activeMatches.set(matchId, match);
 
           // Notify players
-          p1.ws.send(JSON.stringify({
+          sendJson(p1.ws, {
             type: "match_start",
             matchId,
             opponent: p2.playerAddress,
             initialSequence,
             timeLeft: match.timeLeft
-          }));
+          });
 
-          p2.ws.send(JSON.stringify({
+          sendJson(p2.ws, {
             type: "match_start",
             matchId,
             opponent: p1.playerAddress,
             initialSequence,
             timeLeft: match.timeLeft
-          }));
+          });
 
           console.log(`Match started: ${matchId} between ${p1.playerAddress} and ${p2.playerAddress}`);
 
@@ -139,23 +226,23 @@ wss.on("connection", (ws) => {
             player.sequence.push(Math.floor(Math.random() * 4));
 
             // Send next sequence to the player
-            player.ws.send(JSON.stringify({
+            sendJson(player.ws, {
               type: "next_round",
               sequence: player.sequence,
               score: player.score
-            }));
+            });
 
             // Notify opponent of score update
-            opponent.ws.send(JSON.stringify({
+            sendJson(opponent.ws, {
               type: "opponent_score",
               score: player.score
-            }));
+            });
           }
         } else {
           // Player failed
           player.failed = true;
-          player.ws.send(JSON.stringify({ type: "player_failed", score: player.score }));
-          opponent.ws.send(JSON.stringify({ type: "opponent_failed", score: player.score }));
+          sendJson(player.ws, { type: "player_failed", score: player.score });
+          sendJson(opponent.ws, { type: "opponent_failed", score: player.score });
 
           console.log(`Player failed: ${player.address} in match ${matchId} with score ${player.score}`);
 
@@ -183,7 +270,13 @@ wss.on("connection", (ws) => {
     let p1Result = "tie";
     let p2Result = "tie";
 
-    if (match.p1.score > match.p2.score) {
+    if (match.forfeiter === match.p1.address) {
+      p1Result = "lose";
+      p2Result = "win";
+    } else if (match.forfeiter === match.p2.address) {
+      p1Result = "win";
+      p2Result = "lose";
+    } else if (match.p1.score > match.p2.score) {
       p1Result = "win";
       p2Result = "lose";
     } else if (match.p2.score > match.p1.score) {
@@ -205,32 +298,39 @@ wss.on("connection", (ws) => {
     const p2Sig = await signScore(match.p2.address, match.p2.score);
 
     // Send results
-    if (match.p1.ws.readyState === WebSocket.OPEN) {
-      match.p1.ws.send(JSON.stringify({
-        type: "match_end",
-        score: match.p1.score,
-        opponentScore: match.p2.score,
-        result: p1Result,
-        signature: p1Sig,
-        matchId
-      }));
-    }
+    sendJson(match.p1.ws, {
+      type: "match_end",
+      score: match.p1.score,
+      opponentScore: match.p2.score,
+      result: p1Result,
+      signature: p1Sig,
+      matchId
+    });
 
-    if (match.p2.ws.readyState === WebSocket.OPEN) {
-      match.p2.ws.send(JSON.stringify({
-        type: "match_end",
-        score: match.p2.score,
-        opponentScore: match.p1.score,
-        result: p2Result,
-        signature: p2Sig,
-        matchId
-      }));
-    }
+    sendJson(match.p2.ws, {
+      type: "match_end",
+      score: match.p2.score,
+      opponentScore: match.p1.score,
+      result: p2Result,
+      signature: p2Sig,
+      matchId
+    });
   }
 
   ws.on("close", () => {
     // Remove from queue if disconnected
     queue = queue.filter((p) => p.ws !== ws);
+
+    const match = findMatchBySocket(ws);
+    if (match) {
+      const player = match.p1.ws === ws ? match.p1 : match.p2;
+      const opponent = match.p1.ws === ws ? match.p2 : match.p1;
+      player.failed = true;
+      match.forfeiter = player.address;
+      sendJson(opponent.ws, { type: "opponent_failed", score: player.score });
+      endMatch(match.matchId, "disconnect");
+    }
+
     console.log("Connection closed.");
   });
 });

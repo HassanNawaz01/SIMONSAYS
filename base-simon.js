@@ -213,24 +213,112 @@
     let activeMatchId = null;
     let lastSignature = null;
     let lastMatchId = null;
+    const DEFAULT_WS_URL = "wss://simonsays-ayuz.onrender.com";
 
-    function connectWS(onConnectCallback) {
+    function resolveWsUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const override = params.get("ws");
+      if (override) return override;
+
+      const host = window.location.hostname;
+      const isLocal = !host || host === "localhost" || host === "127.0.0.1";
+      if (isLocal && window.location.host) {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return protocol + "//" + window.location.host;
+      }
+      if (isLocal) return "ws://localhost:3000";
+
+      return DEFAULT_WS_URL;
+    }
+
+    function wsToHttpUrl(wsUrl) {
+      try {
+        const url = new URL(wsUrl);
+        url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+        return url.toString();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function wakeMatchServer(wsUrl) {
+      const httpUrl = wsToHttpUrl(wsUrl);
+      if (!httpUrl) return;
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 35000);
+        try {
+          await fetch(httpUrl, {
+            method: "GET",
+            mode: "no-cors",
+            cache: "no-store",
+            signal: controller.signal
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (e) {
+        // The wake request is best-effort. The WebSocket attempt below is the source of truth.
+      }
+    }
+
+    async function connectWS(onConnectCallback, attempt = 1) {
       if (wsClient && wsClient.readyState === WebSocket.OPEN) {
         if (onConnectCallback) onConnectCallback();
         return;
       }
       
-      const params = new URLSearchParams(window.location.search);
-      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      const wsUrl = params.get("ws") || (isLocal ? "ws://localhost:3000" : "wss://simonsays-ayuz.onrender.com");
+      const wsUrl = resolveWsUrl();
+      if (attempt === 1) {
+        setStatus("Waking match server...", "watch");
+        await wakeMatchServer(wsUrl);
+      } else {
+        setStatus("Retrying match server connection...", "watch");
+      }
+
       wsClient = new WebSocket(wsUrl);
+      const socket = wsClient;
+      let settled = false;
+      let ignoreClose = false;
+      const connectTimer = setTimeout(() => failConnection(), 45000);
+
+      function resetAfterConnectionFailure() {
+        isQueueing = false;
+        running = false;
+        startBtn.disabled = false;
+        document.getElementById("multiplayerHud").style.display = "none";
+        updateModeUI();
+      }
+
+      function failConnection() {
+        if (settled) return;
+        settled = true;
+        ignoreClose = true;
+        clearTimeout(connectTimer);
+        try { socket.close(); } catch (e) { }
+
+        if (attempt < 2) {
+          setStatus("Match server is waking up. Trying once more...", "watch");
+          setTimeout(() => connectWS(onConnectCallback, attempt + 1), 1500);
+          return;
+        }
+
+        if (socket === wsClient) wsClient = null;
+        setStatus("Connection failed. Server is offline or still waking up. Please try again.", "dead");
+        resetAfterConnectionFailure();
+      }
 
       wsClient.onopen = () => {
+        if (socket !== wsClient) return;
+        settled = true;
+        clearTimeout(connectTimer);
         console.log("WebSocket connected");
         if (onConnectCallback) onConnectCallback();
       };
 
       wsClient.onmessage = (event) => {
+        if (socket !== wsClient) return;
         const msg = JSON.parse(event.data);
         console.log("WS Msg:", msg);
 
@@ -344,6 +432,11 @@
       };
 
       wsClient.onclose = () => {
+        if (ignoreClose || socket !== wsClient) return;
+        if (!settled) {
+          failConnection();
+          return;
+        }
         console.log("WebSocket closed");
         if (isQueueing || running) {
           isQueueing = false;
@@ -358,11 +451,8 @@
       };
       
       wsClient.onerror = () => {
-        setStatus("Connection failed. If the server was sleeping, it may take 1 min to wake up. Please try again.", "dead");
-        isQueueing = false;
-        running = false;
-        startBtn.disabled = false;
-        updateModeUI();
+        if (socket !== wsClient) return;
+        failConnection();
       };
     }
     updateModeUI();
