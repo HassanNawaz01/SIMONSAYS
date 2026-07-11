@@ -247,6 +247,10 @@
     let pendingReadyId = null;
     let pendingOpponent = null;
     let pendingStakeWei = "0";
+    let pendingDepositTxHash = null;
+    let depositVerified = false;
+    let bothDepositsVerified = false;
+    let readySent = false;
     let lastSettlement = null;
     let pendingRefunds = [];
     let queuePlayers = [];
@@ -327,6 +331,10 @@
       pendingReadyId = msg.readyId;
       pendingOpponent = msg.opponent;
       pendingStakeWei = String(msg.stakeWei || "0");
+      pendingDepositTxHash = null;
+      depositVerified = false;
+      bothDepositsVerified = false;
+      readySent = false;
       const label = await resolveBasename(msg.opponent) || playerLabel(msg.opponent);
       const paid = isPaidStake(msg.stakeWei);
       readyOpponent.textContent = label;
@@ -335,7 +343,7 @@
         : "Are you ready to play? Waiting for both players.";
       readyAcceptBtn.disabled = false;
       readyCancelBtn.disabled = false;
-      readyAcceptBtn.textContent = paid ? "Deposit & Ready" : "Ready";
+      readyAcceptBtn.textContent = paid ? "Deposit stake" : "Send Ready";
       readyOverlay.classList.add("show");
       setStatus("Opponent found. Confirm when ready.", "go");
       updateModeUI();
@@ -345,10 +353,32 @@
       pendingReadyId = null;
       pendingOpponent = null;
       pendingStakeWei = "0";
+      pendingDepositTxHash = null;
+      depositVerified = false;
+      bothDepositsVerified = false;
+      readySent = false;
       readyOverlay.classList.remove("show");
       readyAcceptBtn.disabled = false;
       readyCancelBtn.disabled = false;
       readyAcceptBtn.textContent = "Ready";
+    }
+
+    function renderReadyStatus(msg) {
+      const secondsText = Number.isFinite(Number(msg.seconds)) ? " " + Number(msg.seconds) + "s remaining." : "";
+      if (msg.youReady && !msg.opponentReady) {
+        readySent = true;
+        readyAcceptBtn.disabled = true;
+        readyAcceptBtn.textContent = "Ready sent";
+        readyText.textContent = "You are ready. Opponent has not pressed Ready yet." + secondsText;
+      } else if (!msg.youReady && msg.opponentReady) {
+        readyAcceptBtn.disabled = false;
+        readyAcceptBtn.textContent = "Send Ready";
+        readyText.textContent = "Opponent is ready. Press Send Ready now." + secondsText;
+      } else if (msg.youReady && msg.opponentReady) {
+        readyAcceptBtn.disabled = true;
+        readyAcceptBtn.textContent = "Both ready";
+        readyText.textContent = "Both players are ready. Starting countdown...";
+      }
     }
 
     function addressReady(addr) {
@@ -639,9 +669,15 @@
 
     async function sendReady(isReady) {
       if (!pendingReadyId || !wsClient || wsClient.readyState !== WebSocket.OPEN) return;
-      let txHash = null;
 
-      if (isReady && isPaidStake(pendingStakeWei)) {
+      if (!isReady) {
+        wsClient.send(JSON.stringify({ type: "1v1_ready", readyId: pendingReadyId, ready: false }));
+        hideReadyPrompt();
+        setStatus("Match cancelled.");
+        return;
+      }
+
+      if (isPaidStake(pendingStakeWei) && !depositVerified) {
         if (!addressReady(STAKE_ESCROW_ADDRESS)) {
           setStatus("Paid escrow contract is not deployed yet.", "dead");
           readyText.textContent = "Paid mode needs the escrow contract address before deposits can be locked.";
@@ -652,7 +688,7 @@
           readyAcceptBtn.disabled = true;
           readyAcceptBtn.textContent = "Confirm wallet";
           readyText.textContent = "Confirm the escrow deposit in your wallet.";
-          txHash = await window.ethereum.request({
+          pendingDepositTxHash = await window.ethereum.request({
             method: "eth_sendTransaction",
             params: [{
               from: account,
@@ -661,31 +697,40 @@
               data: encodeStakeDepositData(pendingReadyId, pendingOpponent, pendingStakeWei)
             }]
           });
+          wsClient.send(JSON.stringify({
+            type: "1v1_deposit",
+            readyId: pendingReadyId,
+            txHash: pendingDepositTxHash
+          }));
+          readyAcceptBtn.textContent = "Verifying deposit";
+          readyText.textContent = "Deposit submitted. Waiting for onchain confirmation...";
           refreshPendingReward();
         } catch (e) {
+          pendingDepositTxHash = null;
           readyAcceptBtn.disabled = false;
-          readyAcceptBtn.textContent = "Deposit & Ready";
+          readyAcceptBtn.textContent = "Deposit stake";
           readyText.textContent = (e && e.code === 4001) ? "Deposit cancelled." : "Deposit failed. Please try again.";
           setStatus("Deposit failed.", "dead");
           return;
         }
+        return;
+      }
+
+      if (isPaidStake(pendingStakeWei) && !bothDepositsVerified) {
+        readyText.textContent = "Your deposit is confirmed. Waiting for opponent deposit...";
+        return;
       }
 
       wsClient.send(JSON.stringify({
         type: "1v1_ready",
         readyId: pendingReadyId,
-        ready: isReady,
-        txHash
+        ready: true
       }));
-      if (isReady) {
-        readyAcceptBtn.disabled = true;
-        readyAcceptBtn.textContent = "Ready sent";
-        readyText.textContent = "Waiting for opponent...";
-        setStatus("Ready sent. Waiting for opponent...", "watch");
-      } else {
-        hideReadyPrompt();
-        setStatus("Match cancelled.");
-      }
+      readySent = true;
+      readyAcceptBtn.disabled = true;
+      readyAcceptBtn.textContent = "Ready sent";
+      readyText.textContent = "You are ready. Waiting for opponent Ready...";
+      setStatus("Ready sent. Waiting for opponent...", "watch");
     }
 
     readyAcceptBtn.addEventListener("click", () => sendReady(true));
@@ -811,8 +856,10 @@
               updateModeUI();
               refreshPendingReward();
             } else if (readyOverlay.classList.contains("show")) {
-              readyAcceptBtn.disabled = false;
-              readyAcceptBtn.textContent = isPaidStake(pendingStakeWei) ? "Deposit & Ready" : "Ready";
+              readyAcceptBtn.disabled = isPaidStake(pendingStakeWei) && depositVerified && !bothDepositsVerified;
+              readyAcceptBtn.textContent = isPaidStake(pendingStakeWei)
+                ? (depositVerified ? (bothDepositsVerified ? "Send Ready" : "Waiting for deposit") : "Deposit stake")
+                : "Send Ready";
             }
           }
         }
@@ -870,18 +917,55 @@
           showReadyPrompt(msg);
         }
 
+        else if (msg.type === "deposit_state") {
+          if (msg.verifying) {
+            readyAcceptBtn.disabled = true;
+            readyAcceptBtn.textContent = "Verifying deposit";
+            readyText.textContent = "Checking your escrow deposit on Base...";
+            return;
+          }
+          depositVerified = Boolean(msg.youDeposited);
+          bothDepositsVerified = Boolean(msg.bothDeposited);
+          if (bothDepositsVerified) {
+            readyAcceptBtn.disabled = false;
+            readyAcceptBtn.textContent = "Send Ready";
+            readyText.textContent = "Both deposits confirmed. Press Send Ready; both players must confirm.";
+            setStatus("Both deposits confirmed. Send Ready when prepared.", "go");
+          } else if (depositVerified) {
+            readyAcceptBtn.disabled = true;
+            readyAcceptBtn.textContent = "Waiting for deposit";
+            readyText.textContent = "Your deposit is confirmed. Opponent has not deposited yet.";
+            setStatus("Deposit confirmed. Waiting for opponent deposit...", "watch");
+          } else if (msg.opponentDeposited) {
+            readyAcceptBtn.disabled = false;
+            readyAcceptBtn.textContent = "Deposit stake";
+            readyText.textContent = "Opponent deposited. Submit your matching stake to continue.";
+          }
+        }
+
         else if (msg.type === "ready_state") {
-          const readyCount = msg.readyCount || 0;
-          readyText.textContent = msg.message || (readyCount === 1 ? "One player is ready. Waiting for the other..." : "Both players ready.");
+          if (msg.message) readyText.textContent = msg.message;
+          else renderReadyStatus(msg);
+        }
+
+        else if (msg.type === "ready_countdown") {
+          renderReadyStatus(msg);
         }
 
         else if (msg.type === "match_cancelled") {
+          const refundMessage = msg.automaticRefund
+            ? "Ready time expired. Both stakes were credited to Pending reward for claim."
+            : (msg.refundPending
+                ? "Match cancelled. Automatic stake refund is pending; open Pending reward shortly."
+                : "Match cancelled. Open Pending reward to recover any deposited stake.");
           hideReadyPrompt();
           isQueueing = false;
           startBtn.disabled = false;
           updateModeUI();
           refreshPendingReward();
-          setStatus("Match cancelled. Find another 1v1 when ready.", "watch");
+          setTimeout(refreshPendingReward, 6000);
+          setTimeout(refreshPendingReward, 15000);
+          setStatus(refundMessage, "watch");
         }
         
         else if (msg.type === "match_start") {

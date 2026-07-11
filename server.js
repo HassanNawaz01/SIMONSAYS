@@ -235,6 +235,7 @@ const MAX_EARLY_CLICKS = 20;
 const PAID_AUTH_TTL_MS = 5 * 60 * 1000;
 const AUTO_SETTLE_MAX_ATTEMPTS = 5;
 const AUTO_SETTLE_RETRY_MS = 15000;
+const PAID_READY_CONFIRM_MS = 60 * 1000;
 
 let clients = new Set();
 let connectionsByIp = new Map();
@@ -309,6 +310,28 @@ async function autoSettlePaidReward(settlement, attempt = 1) {
   return settlement;
 }
 
+async function createPaidSettlement(matchId, stakeWei, p1, p2, winner) {
+  const escrowMatch = await stakeEscrow.matches(matchId);
+  const messageHash = ethers.solidityPackedKeccak256(
+    ["address", "bytes32", "address", "address", "uint256", "address"],
+    [STAKE_ESCROW_ADDRESS, matchId, escrowMatch.player1, escrowMatch.player2, escrowMatch.stake, winner]
+  );
+  const settlement = {
+    matchId,
+    winner,
+    signature: await wallet.signMessage(ethers.getBytes(messageHash)),
+    stakeWei,
+    p1,
+    p2,
+    createdAt: Date.now(),
+    settled: false,
+    txHash: null
+  };
+  completedSettlements.set(matchId.toLowerCase(), settlement);
+  await autoSettlePaidReward(settlement);
+  return settlement;
+}
+
 function broadcast(match, data) {
   const msg = JSON.stringify(data);
   if (match.p1.ws.readyState === WebSocket.OPEN) match.p1.ws.send(msg);
@@ -379,14 +402,78 @@ function removeFromQueue(ws) {
   if (queue.length !== before) broadcastQueue();
 }
 
-function cancelPending(readyId, reason = "cancelled") {
+async function cancelPending(readyId, reason = "cancelled") {
   const pending = pendingMatches.get(readyId);
   if (!pending) return;
 
   clearTimeout(pending.readyTimer);
+  clearInterval(pending.readyInterval);
   pendingMatches.delete(readyId);
-  sendJson(pending.p1.ws, { type: "match_cancelled", reason });
-  sendJson(pending.p2.ws, { type: "match_cancelled", reason });
+  let settlement = null;
+  let fullyFunded = pending.funded;
+  if (pending.stakeWei !== "0" && stakeEscrow) {
+    try {
+      const escrowMatch = await stakeEscrow.matches(pending.readyId);
+      fullyFunded = !escrowMatch.settled && escrowMatch.player1Deposited && escrowMatch.player2Deposited;
+    } catch (error) {
+      console.error(`Could not check pending match funding ${readyId}:`, error.message || error);
+    }
+  }
+  if (fullyFunded && pending.stakeWei !== "0") {
+    try {
+      settlement = await createPaidSettlement(
+        pending.readyId,
+        pending.stakeWei,
+        pending.p1.playerAddress,
+        pending.p2.playerAddress,
+        ZERO_ADDRESS
+      );
+    } catch (error) {
+      console.error(`Could not auto-refund funded pending match ${readyId}:`, error.message || error);
+    }
+  }
+  const payload = {
+    type: "match_cancelled",
+    reason,
+    automaticRefund: Boolean(settlement && settlement.settled),
+    refundPending: Boolean(fullyFunded && (!settlement || !settlement.settled)),
+    settlement
+  };
+  sendJson(pending.p1.ws, payload);
+  sendJson(pending.p2.ws, payload);
+}
+
+function startPaidReadyWindow(pending) {
+  clearTimeout(pending.readyTimer);
+  clearInterval(pending.readyInterval);
+  pending.readyDeadline = Date.now() + PAID_READY_CONFIRM_MS;
+  pending.readyTimer = setTimeout(() => cancelPending(pending.readyId, "ready_timeout"), PAID_READY_CONFIRM_MS);
+  sendPendingReadyState(pending);
+  pending.readyInterval = setInterval(() => {
+    if (!pendingMatches.has(pending.readyId)) {
+      clearInterval(pending.readyInterval);
+      return;
+    }
+    const seconds = Math.max(0, Math.ceil((pending.readyDeadline - Date.now()) / 1000));
+    sendPendingReadyState(pending, seconds);
+  }, 1000);
+}
+
+function sendPendingDepositState(pending) {
+  const p1Deposited = pending.deposited.has(pending.p1.ws);
+  const p2Deposited = pending.deposited.has(pending.p2.ws);
+  const state = { type: "deposit_state", bothDeposited: p1Deposited && p2Deposited };
+  sendJson(pending.p1.ws, { ...state, youDeposited: p1Deposited, opponentDeposited: p2Deposited });
+  sendJson(pending.p2.ws, { ...state, youDeposited: p2Deposited, opponentDeposited: p1Deposited });
+}
+
+function sendPendingReadyState(pending, seconds = null) {
+  const p1Ready = pending.ready.has(pending.p1.ws);
+  const p2Ready = pending.ready.has(pending.p2.ws);
+  const remaining = seconds ?? Math.max(0, Math.ceil(((pending.readyDeadline || Date.now()) - Date.now()) / 1000));
+  const state = { type: "ready_countdown", seconds: remaining, readyCount: pending.ready.size };
+  sendJson(pending.p1.ws, { ...state, youReady: p1Ready, opponentReady: p2Ready });
+  sendJson(pending.p2.ws, { ...state, youReady: p2Ready, opponentReady: p1Ready });
 }
 
 function startPendingMatch(readyId) {
@@ -394,6 +481,7 @@ function startPendingMatch(readyId) {
   if (!pending) return;
 
   clearTimeout(pending.readyTimer);
+  clearInterval(pending.readyInterval);
   pendingMatches.delete(readyId);
 
   const matchId = readyId;
@@ -509,7 +597,11 @@ function tryCreateReadyPair() {
         p1,
         p2,
         ready: new Set(),
+        deposited: new Set(),
         verifying: new Set(),
+        funded: false,
+        readyDeadline: null,
+        readyInterval: null,
         readyTimer: setTimeout(() => cancelPending(readyId, "ready_timeout"), readyTimeoutMs)
       };
 
@@ -570,24 +662,13 @@ async function endMatch(matchId, reason) {
 
   if (match.stakeWei !== "0" && stakeEscrow) {
     try {
-      const escrowMatch = await stakeEscrow.matches(matchId);
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["address", "bytes32", "address", "address", "uint256", "address"],
-        [STAKE_ESCROW_ADDRESS, matchId, escrowMatch.player1, escrowMatch.player2, escrowMatch.stake, winnerAddress]
-      );
-      settlement = {
+      settlement = await createPaidSettlement(
         matchId,
-        winner: winnerAddress,
-        signature: await wallet.signMessage(ethers.getBytes(messageHash)),
-        stakeWei: match.stakeWei,
-        p1: match.p1.address,
-        p2: match.p2.address,
-        createdAt: Date.now(),
-        settled: false,
-        txHash: null
-      };
-      completedSettlements.set(matchId.toLowerCase(), settlement);
-      await autoSettlePaidReward(settlement);
+        match.stakeWei,
+        match.p1.address,
+        match.p2.address,
+        winnerAddress
+      );
     } catch (err) {
       console.error("Could not sign paid settlement:", err);
     }
@@ -763,6 +844,43 @@ wss.on("connection", (ws, req) => {
         if (pending) cancelPending(pending.readyId, "cancelled");
       }
 
+      else if (data.type === "1v1_deposit") {
+        const pending = pendingMatches.get(data.readyId);
+        if (!pending || pending.stakeWei === "0" || (pending.p1.ws !== ws && pending.p2.ws !== ws)) {
+          sendJson(ws, { type: "error", message: "Paid match expired. Please find another 1v1." });
+          return;
+        }
+        if (pending.deposited.has(ws)) {
+          sendPendingDepositState(pending);
+          return;
+        }
+        if (pending.verifying.has(ws)) {
+          sendJson(ws, { type: "deposit_state", verifying: true, youDeposited: false, opponentDeposited: false, bothDeposited: false });
+          return;
+        }
+        if (!/^0x[0-9a-fA-F]{64}$/.test(String(data.txHash || ""))) {
+          sendJson(ws, { type: "error", message: "Paid matches require a valid escrow deposit transaction." });
+          return;
+        }
+
+        pending.verifying.add(ws);
+        try {
+          sendJson(ws, { type: "deposit_state", verifying: true, youDeposited: false, bothDeposited: false });
+          await verifyPaidDeposit(pending, ws, String(data.txHash));
+          if (pendingMatches.get(data.readyId) !== pending) {
+            sendJson(ws, { type: "error", message: "Match expired after deposit. Open Pending reward to recover the stake." });
+            return;
+          }
+          pending.deposited.add(ws);
+          pending.funded = pending.deposited.size >= 2;
+          sendPendingDepositState(pending);
+        } catch (error) {
+          sendJson(ws, { type: "error", message: error.message || "Could not verify escrow deposit." });
+        } finally {
+          pending.verifying.delete(ws);
+        }
+      }
+
       else if (data.type === "1v1_ready") {
         const pending = pendingMatches.get(data.readyId);
         if (!pending || (pending.p1.ws !== ws && pending.p2.ws !== ws)) {
@@ -780,35 +898,23 @@ wss.on("connection", (ws, req) => {
           return;
         }
 
-        if (pending.stakeWei !== "0" && !/^0x[0-9a-fA-F]{64}$/.test(String(data.txHash || ""))) {
-          sendJson(ws, { type: "error", message: "Paid matches require an escrow deposit transaction first." });
-          return;
-        }
-
         if (pending.stakeWei !== "0") {
-          pending.verifying.add(ws);
-          try {
-            sendJson(ws, { type: "ready_state", readyCount: pending.ready.size, message: "Verifying escrow deposit..." });
-            await verifyPaidDeposit(pending, ws, String(data.txHash));
-            if (pendingMatches.get(data.readyId) !== pending) {
-              sendJson(ws, { type: "error", message: "Match expired after deposit. Open Pending reward to refund or claim, then find another 1v1." });
-              return;
-            }
-          } catch (err) {
-            sendJson(ws, { type: "error", message: err.message || "Could not verify escrow deposit." });
+          if (!pending.funded || !pending.deposited.has(ws)) {
+            sendJson(ws, { type: "error", message: "Both escrow deposits must be confirmed before Ready." });
             return;
-          } finally {
-            pending.verifying.delete(ws);
           }
         }
 
         pending.ready.add(ws);
         const readyCount = pending.ready.size;
-        sendJson(pending.p1.ws, { type: "ready_state", readyCount });
-        sendJson(pending.p2.ws, { type: "ready_state", readyCount });
 
         if (readyCount >= 2) {
           startPendingMatch(pending.readyId);
+        } else if (pending.stakeWei !== "0") {
+          startPaidReadyWindow(pending);
+        } else {
+          sendJson(pending.p1.ws, { type: "ready_state", readyCount, youReady: pending.ready.has(pending.p1.ws), opponentReady: pending.ready.has(pending.p2.ws) });
+          sendJson(pending.p2.ws, { type: "ready_state", readyCount, youReady: pending.ready.has(pending.p2.ws), opponentReady: pending.ready.has(pending.p1.ws) });
         }
       }
 
