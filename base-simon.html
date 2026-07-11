@@ -51,7 +51,16 @@
         <span>Badges</span>
       </button>
     </nav>
-    <button id="walletBtn">Connect wallet</button>
+    <div class="header-actions">
+      <button id="guideBtn" class="icon-btn" type="button" aria-label="Open game guide" title="Game guide">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.8 9a2.4 2.4 0 1 1 3.5 2.1c-.9.5-1.3 1-1.3 2" />
+          <path d="M12 17h.01" />
+        </svg>
+      </button>
+      <button id="walletBtn">Connect wallet</button>
+    </div>
   </header>
 
   <div class="wrap">
@@ -135,9 +144,7 @@
 
       <div class="safe">
         <div class="dot"></div>
-        <div><b style="color:#fff">Wallet-safe by design.</b> This app reads your wallet address, and paid matchmaking asks for a gas-free ownership signature. There are no
-          token approvals or spending permissions. Free games only use zero-value contract calls. Paid 1v1 games
-          use an escrow deposit and a separate reward withdrawal, so failed reward claims can be retried later.</div>
+        <div><b style="color:#fff">Wallet-safe by design.</b> This app reads your wallet address and never requests token approvals or unlimited spending permissions. Paid matchmaking uses a gas-free ownership signature. Score and badge mints send 0 ETH but require network gas. In paid 1v1, your wallet sends only the selected stake to escrow plus gas; rewards are withdrawn separately and failed claims can be retried.</div>
       </div>
     </section>
 
@@ -238,7 +245,29 @@
     </div>
   </div>
 
-  <script src="base-simon.js?v=23"></script>
+  <div class="overlay" id="guideOverlay" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+    <div class="guide-card">
+      <div class="guide-head">
+        <div>
+          <span>Simon on Base</span>
+          <h2 id="guideTitle">Game guide</h2>
+        </div>
+        <button id="guideCloseBtn" class="icon-btn" type="button" aria-label="Close game guide" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div class="guide-list">
+        <section><b>Practice</b><p>Train without connecting a wallet. Scores are not minted.</p></section>
+        <section><b>Onchain</b><p>Play solo, then mint your score on Base with a 0 ETH contract call plus gas.</p></section>
+        <section><b>Free 1v1</b><p>Match by wallet, both players press Ready, then a 5-second countdown starts the 60-second game.</p></section>
+        <section><b>Paid 1v1</b><p>Choose the same stake as your opponent. Both deposit and press Ready. A 0.5% fee is deducted from each stake only when a winner is settled.</p></section>
+        <section><b>Rewards</b><p>The winner receives the remaining combined stakes. Use Pending reward to withdraw winnings or recover an eligible refund.</p></section>
+      </div>
+      <div class="guide-note"><span></span>Always verify the network, contract address, and ETH amount shown by your wallet before confirming.</div>
+    </div>
+  </div>
+
+  <script src="base-simon.js?v=24"></script>
 </body>
 
 </html>

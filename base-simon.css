@@ -188,6 +188,39 @@
       background: rgba(0,82,255,0.06);
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 50%;
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .icon-btn:hover { color: var(--text); border-color: var(--blue) }
+    .icon-btn:focus-visible { outline: 2px solid var(--blue-light); outline-offset: 2px }
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
     /* ═══════════ MAIN WRAP ═══════════ */
     .wrap {
       width: 100%;
@@ -1073,6 +1106,63 @@
 
     .overlay.show { display: flex }
 
+    .guide-card {
+      width: min(560px, 100%);
+      max-height: min(720px, calc(100vh - 40px));
+      overflow-y: auto;
+      background: var(--surface-solid);
+      border: 1px solid var(--line-hover);
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+
+    .guide-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .guide-head span {
+      display: block;
+      color: var(--blue-light);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .guide-head h2 { margin-top: 4px; font-size: 22px; letter-spacing: 0 }
+    .guide-head .icon-btn { flex: none }
+    .guide-list { padding: 6px 0 }
+    .guide-list section {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .guide-list b { font-size: 13px; color: var(--text) }
+    .guide-list p { color: var(--muted); font-size: 13px; line-height: 1.55 }
+    .guide-note {
+      display: flex;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      padding-top: 14px;
+    }
+    .guide-note span {
+      width: 7px;
+      height: 7px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: var(--good);
+      flex: none;
+    }
+
     .card {
       background: var(--surface-solid);
       border: 1px solid var(--line);
@@ -1262,6 +1352,8 @@
       nav button { padding: 7px 14px; font-size: 12px; gap: 5px }
       nav button svg { width: 14px; height: 14px }
       #walletBtn { padding: 7px 14px; font-size: 12px }
+      .header-actions { gap: 6px }
+      .icon-btn { width: 32px; height: 32px }
       .wrap { padding: 18px 16px 48px }
       .board { width: min(82vw, 300px) }
       .stat b { font-size: 22px }
@@ -1270,12 +1362,14 @@
     @media (max-width: 480px) {
       header { flex-wrap: wrap; justify-content: center; gap: 6px }
       .brand { margin-right: auto }
-      #walletBtn { order: 2 }
+      .header-actions { order: 2 }
       nav { order: 3; width: 100%; justify-content: center; margin-top: 2px }
       .modes { grid-template-columns: 1fr }
       .stake-options { grid-template-columns: 1fr 1fr }
       .stat b { font-size: 20px }
       .card .big { font-size: 56px }
+      .guide-card { padding: 18px }
+      .guide-list section { grid-template-columns: 1fr; gap: 5px }
     }
 
     @media (prefers-reduced-motion: reduce) {

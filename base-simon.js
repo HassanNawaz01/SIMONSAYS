@@ -117,6 +117,24 @@
     const rewardPanel = $("rewardPanel"), pendingRewardAmount = $("pendingRewardAmount"), pendingRewardMsg = $("pendingRewardMsg"), claimRewardBtn = $("claimRewardBtn"), refundStakeBtn = $("refundStakeBtn");
     const readyOverlay = $("readyOverlay"), readyOpponent = $("readyOpponent"), readyText = $("readyText");
     const readyAcceptBtn = $("readyAcceptBtn"), readyCancelBtn = $("readyCancelBtn");
+    const guideOverlay = $("guideOverlay"), guideBtn = $("guideBtn"), guideCloseBtn = $("guideCloseBtn");
+
+    function closeGuide() {
+      guideOverlay.classList.remove("show");
+      guideBtn.focus();
+    }
+
+    guideBtn.addEventListener("click", () => {
+      guideOverlay.classList.add("show");
+      guideCloseBtn.focus();
+    });
+    guideCloseBtn.addEventListener("click", closeGuide);
+    guideOverlay.addEventListener("click", event => {
+      if (event.target === guideOverlay) closeGuide();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && guideOverlay.classList.contains("show")) closeGuide();
+    });
 
     /* ================= tabs ================= */
     let quitConfirmCallback = null;
