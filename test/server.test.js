@@ -101,6 +101,7 @@ test("serves only public assets and sends browser security headers", async () =>
   assert.match(page.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
   assert.equal(page.headers.get("x-content-type-options"), "nosniff");
   assert.equal(page.headers.get("x-frame-options"), "DENY");
+  assert.doesNotMatch(await page.text(), /Settle paid reward/i);
 
   for (const pathname of ["/.env", "/server.js", "/package.json", "/contracts/SimonStakeEscrow.sol"]) {
     const response = await fetch(baseUrl + pathname);

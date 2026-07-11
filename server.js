@@ -47,9 +47,12 @@ const stakeEscrow = ethers.isAddress(STAKE_ESCROW_ADDRESS)
       "function hasDeposit(bytes32 matchId, address player) view returns (bool)",
       "function matches(bytes32 matchId) view returns (address player1, address player2, uint256 stake, uint64 createdAt, bool player1Deposited, bool player2Deposited, bool settled)",
       "function signerAddress() view returns (address)",
-      "function allowedStake(uint256 stake) view returns (bool)"
+      "function allowedStake(uint256 stake) view returns (bool)",
+      "function settle(bytes32 matchId, address winner, bytes signature)"
     ], stakeProvider)
   : null;
+const settlementSigner = new ethers.NonceManager(wallet.connect(stakeProvider));
+const stakeEscrowWriter = stakeEscrow ? stakeEscrow.connect(settlementSigner) : null;
 let paidEscrowConfigPromise = null;
 
 function ensurePaidEscrowConfigured(stakeWei) {
@@ -230,6 +233,8 @@ const MAX_MESSAGES_PER_SECOND = 40;
 const MIN_CLICK_INTERVAL_MS = 70;
 const MAX_EARLY_CLICKS = 20;
 const PAID_AUTH_TTL_MS = 5 * 60 * 1000;
+const AUTO_SETTLE_MAX_ATTEMPTS = 5;
+const AUTO_SETTLE_RETRY_MS = 15000;
 
 let clients = new Set();
 let connectionsByIp = new Map();
@@ -265,6 +270,43 @@ function playbackDelayMs(player) {
   const level = player.score + 1;
   const speed = Math.max(220, 620 - level * 32);
   return 650 + player.sequence.length * (speed + 140) - 150;
+}
+
+async function autoSettlePaidReward(settlement, attempt = 1) {
+  if (!stakeEscrowWriter || !settlement || settlement.settled) return settlement;
+  settlement.settlementAttempt = attempt;
+
+  try {
+    await ensurePaidEscrowConfigured(settlement.stakeWei);
+    const escrowMatch = await stakeEscrow.matches(settlement.matchId);
+    if (escrowMatch.settled) {
+      settlement.settled = true;
+      settlement.settledAt = Date.now();
+      return settlement;
+    }
+
+    const tx = await stakeEscrowWriter.settle(
+      settlement.matchId,
+      settlement.winner,
+      settlement.signature
+    );
+    settlement.txHash = tx.hash;
+    const receipt = await stakeProvider.waitForTransaction(tx.hash, 1, 30000);
+    if (!receipt || receipt.status !== 1) throw new Error("Settlement transaction failed.");
+    settlement.settled = true;
+    settlement.settledAt = Date.now();
+    delete settlement.settlementError;
+    console.log(`Paid reward settled automatically: ${settlement.matchId} tx=${tx.hash}`);
+  } catch (error) {
+    settlement.settled = false;
+    settlement.settlementError = error.shortMessage || error.message || "automatic settlement failed";
+    console.error(`Automatic settlement attempt ${attempt} failed for ${settlement.matchId}:`, settlement.settlementError);
+    if (attempt < AUTO_SETTLE_MAX_ATTEMPTS) {
+      setTimeout(() => autoSettlePaidReward(settlement, attempt + 1), AUTO_SETTLE_RETRY_MS);
+    }
+  }
+
+  return settlement;
 }
 
 function broadcast(match, data) {
@@ -540,9 +582,12 @@ async function endMatch(matchId, reason) {
         stakeWei: match.stakeWei,
         p1: match.p1.address,
         p2: match.p2.address,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        settled: false,
+        txHash: null
       };
       completedSettlements.set(matchId.toLowerCase(), settlement);
+      await autoSettlePaidReward(settlement);
     } catch (err) {
       console.error("Could not sign paid settlement:", err);
     }

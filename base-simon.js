@@ -15,7 +15,6 @@
       mintVerified: "0x135b34bd", // mintVerifiedScore(uint256,uint8,bytes32,bytes)
       scoreSigner: "0x5b7633d0", // signerAddress()
       stakeDeposit: "0xd954863c", // deposit(bytes32,address,uint256)
-      stakeSettle: "0x1369b2b4", // settle(bytes32,address,bytes)
       stakeRefundExpired: "0xcc3e049b", // refundExpired(bytes32)
       stakeMatches: "0x9fe9ada3", // matches(bytes32)
       stakeCredits: "0xfe5ff468", // credits(address)
@@ -393,24 +392,6 @@
         pad64(BigInt(stakeWei));
     }
 
-    function encodeBytes(hex) {
-      const clean = String(hex || "0x").replace(/^0x/, "");
-      const byteLen = clean.length / 2;
-      const paddedLen = Math.ceil(byteLen / 32) * 64;
-      return pad64(BigInt(byteLen)) + clean.padEnd(paddedLen, "0");
-    }
-
-    function encodeStakeSettleData(matchId, winner, signature) {
-      const cleanMatchId = matchId.replace(/^0x/, "").padStart(64, "0");
-      const cleanWinner = String(winner || "0x0").toLowerCase();
-      const signatureOffset = pad64(96n);
-      return SEL.stakeSettle +
-        cleanMatchId +
-        pad64(BigInt(cleanWinner)) +
-        signatureOffset +
-        encodeBytes(signature);
-    }
-
     function encodeStakeRefundData(matchId) {
       return SEL.stakeRefundExpired + matchId.replace(/^0x/, "").padStart(64, "0");
     }
@@ -500,10 +481,8 @@
 
     function updateSettleRewardUI() {
       if (!settleRewardBtn) return;
-      const canSettle = modeKey === "multiplayer" && lastSettlement && lastSettlement.signature && escrowReady();
-      settleRewardBtn.hidden = !canSettle;
-      settleRewardBtn.disabled = false;
-      settleRewardBtn.textContent = "Settle paid reward";
+      settleRewardBtn.hidden = true;
+      settleRewardBtn.disabled = true;
     }
 
     async function fetchServerSettlement(matchId) {
@@ -581,7 +560,7 @@
         if (amount > 0n) {
           pendingRewardMsg.textContent = "Reward is safe in escrow. You can claim now or later.";
         } else if (lastSettlement || recoveredSettlement) {
-          pendingRewardMsg.textContent = "Paid match is funded. Settle the reward first, then claim it here.";
+          pendingRewardMsg.textContent = "Paid match ended. The server is automatically crediting the winner's reward.";
         } else if (refundable) {
           pendingRewardMsg.textContent = "A paid match did not start. Refund the stake, then claim it here. The current contract's deposit fee is not refundable.";
         } else if (pendingRefunds.length) {
@@ -657,40 +636,6 @@
     }
 
     refundStakeBtn?.addEventListener("click", refundPendingStake);
-
-    async function settlePaidReward() {
-      if (!lastSettlement) return;
-      if (!account) { await connect(); if (!account) return; }
-      try {
-        await ensureBase();
-        settleRewardBtn.disabled = true;
-        mintMsg.textContent = "Confirm paid reward settlement in your wallet.";
-        mintMsg.className = "";
-        const tx = await window.ethereum.request({
-          method: "eth_sendTransaction",
-          params: [{
-            from: account,
-            to: STAKE_ESCROW_ADDRESS,
-            value: "0x0",
-            data: encodeStakeSettleData(lastSettlement.matchId, lastSettlement.winner, lastSettlement.signature)
-          }]
-        });
-        const settledMatchId = lastSettlement.matchId;
-        mintMsg.innerHTML = "Paid reward settled. Claim it from Pending reward. <a href='" + BASE_CHAIN.blockExplorerUrls[0] + "/tx/" + tx + "' target='_blank' rel='noopener noreferrer'>View on Basescan</a>";
-        mintMsg.className = "ok";
-        clearSettlement(settledMatchId);
-        setTimeout(refreshPendingReward, 6000);
-        setTimeout(refreshPendingReward, 15000);
-      } catch (e) {
-        settleRewardBtn.disabled = false;
-        mintMsg.textContent = (e && e.code === 4001)
-          ? "Settlement cancelled. You can retry anytime."
-          : "Settlement failed. You can retry anytime.";
-        mintMsg.className = "err";
-      }
-    }
-
-    settleRewardBtn?.addEventListener("click", settlePaidReward);
 
     async function sendReady(isReady) {
       if (!pendingReadyId || !wsClient || wsClient.readyState !== WebSocket.OPEN) return;
@@ -1031,7 +976,7 @@
           mintMsg.className = "";
           mintBtn.style.display = "";
           mintBtn.disabled = false;
-          settleRewardBtn.hidden = true;
+          if (settleRewardBtn) settleRewardBtn.hidden = true;
           
           if (msg.result === "win") {
             overTitle.textContent = "You Won! 🏆";
@@ -1051,15 +996,21 @@
             : (isPaidStake(msg.stakeWei) ? await fetchServerSettlement(msg.matchId) : null);
 
           if (paidSettlement && paidSettlement.signature && paidSettlement.winner) {
-            saveSettlement({
-              matchId: msg.matchId,
-              winner: paidSettlement.winner,
-              signature: paidSettlement.signature,
-              stakeWei: msg.stakeWei
-            });
-            mintMsg.textContent = msg.result === "lose"
-              ? "Paid match ended. You can submit the signed result; the reward still goes only to the winner."
-              : "Paid match ended. " + paidBreakdown(msg.stakeWei) + " Settle the reward, then claim it from Pending reward.";
+            if (paidSettlement.settled) {
+              clearSettlement(msg.matchId);
+              mintMsg.textContent = msg.result === "lose"
+                ? "Paid match settled automatically. The winner's reward is now pending for claim."
+                : "Reward credited automatically. Open Pending reward and claim it when ready.";
+              mintMsg.className = "ok";
+            } else {
+              saveSettlement({
+                matchId: msg.matchId,
+                winner: paidSettlement.winner,
+                signature: paidSettlement.signature,
+                stakeWei: msg.stakeWei
+              });
+              mintMsg.textContent = "Automatic reward settlement is pending. The server will retry; no player transaction is needed.";
+            }
           } else if (isPaidStake(msg.stakeWei)) {
             mintMsg.textContent = "Paid match ended, but settlement was not ready. Open 1v1 Pending reward to retry.";
             mintMsg.className = "err";
@@ -1068,6 +1019,8 @@
           overlay.classList.add("show");
           document.getElementById("multiplayerHud").style.display = "none";
           refreshPendingReward();
+          setTimeout(refreshPendingReward, 6000);
+          setTimeout(refreshPendingReward, 15000);
           updateModeUI();
           
           wsClient.close();
@@ -1245,11 +1198,11 @@
       if (runMode.mint) {
         mintBtn.style.display = "";
         mintBtn.disabled = lastScore < 1;
-        settleRewardBtn.hidden = true;
+        if (settleRewardBtn) settleRewardBtn.hidden = true;
         overTitle.textContent = "Game over";
       } else {
         mintBtn.style.display = "none";
-        settleRewardBtn.hidden = true;
+        if (settleRewardBtn) settleRewardBtn.hidden = true;
         overTitle.textContent = "Practice over";
       }
       overlay.classList.add("show");
