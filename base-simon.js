@@ -4,7 +4,7 @@
        CONFIG - deploy SimonOnBase.sol on Base mainnet,
        then paste the deployed address below.
        ========================================================= */
-    const CONTRACT_ADDRESS = "0xd376DA21BDCDD1338C2283488d592880F25F09f1";
+    const CONTRACT_ADDRESS = "0xbBEf2cf4d3601Cdb0C67b29a0581c3C606d62dF5";
     const STAKE_ESCROW_ADDRESS = "0xdf2b460F59d0Ee0B5C892A9eF1b645a33BBEF563";
     const STAKE_ESCROW_DEPLOY_BLOCK = "0x2e3bcf8";
     const STAKE_DEPOSITED_TOPIC = "0xe3ad398758b9cbdf4196c5d060a1aebae967b4f9115c7394e937cbb46f449587";

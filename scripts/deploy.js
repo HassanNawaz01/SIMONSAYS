@@ -46,6 +46,16 @@ async function main() {
   console.log("Server signer:", signerAddress);
 
   const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode, wallet);
+  if (process.argv.includes("--estimate")) {
+    const deployment = await factory.getDeployTransaction(signerAddress);
+    const gas = await provider.estimateGas({ ...deployment, from: wallet.address });
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.maxFeePerGas || feeData.gasPrice;
+    console.log("Estimated gas:", gas.toString());
+    console.log("Maximum estimated deployment cost:", ethers.formatEther(gas * gasPrice), "ETH");
+    return;
+  }
+
   const contract = await factory.deploy(signerAddress);
   console.log("Deployment tx:", contract.deploymentTransaction().hash);
   await contract.waitForDeployment();

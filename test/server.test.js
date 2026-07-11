@@ -171,7 +171,7 @@ test("pairs unique wallets and rejects click automation during pattern playback"
   const ended = await p1.next((message) => message.type === "match_end");
   const scorePayload = ethers.AbiCoder.defaultAbiCoder().encode(
     ["address", "uint256", "address", "uint256", "uint8", "bytes32"],
-    ["0xd376DA21BDCDD1338C2283488d592880F25F09f1", 8453n, address1, BigInt(ended.score), 1, ready1.readyId]
+    ["0xbBEf2cf4d3601Cdb0C67b29a0581c3C606d62dF5", 8453n, address1, BigInt(ended.score), 1, ready1.readyId]
   );
   const recoveredSigner = ethers.verifyMessage(
     ethers.getBytes(ethers.keccak256(scorePayload)),

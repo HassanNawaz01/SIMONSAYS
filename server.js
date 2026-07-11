@@ -38,7 +38,7 @@ try {
 console.log(`Simon says server started. Signer address: ${wallet.address}`);
 
 const STAKE_ESCROW_ADDRESS = process.env.STAKE_ESCROW_ADDRESS || "0xdf2b460F59d0Ee0B5C892A9eF1b645a33BBEF563";
-const SCORE_CONTRACT_ADDRESS = process.env.SCORE_CONTRACT_ADDRESS || "0xd376DA21BDCDD1338C2283488d592880F25F09f1";
+const SCORE_CONTRACT_ADDRESS = process.env.SCORE_CONTRACT_ADDRESS || "0xbBEf2cf4d3601Cdb0C67b29a0581c3C606d62dF5";
 const BASE_RPC_URL = process.env.BASE_RPC_URL || "https://mainnet.base.org";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const stakeProvider = new ethers.JsonRpcProvider(BASE_RPC_URL);
