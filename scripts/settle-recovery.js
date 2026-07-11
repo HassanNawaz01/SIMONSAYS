@@ -36,7 +36,7 @@ async function main() {
   }
 
   const rpcUrl = process.env.BASE_RPC_URL || "https://mainnet.base.org";
-  const escrowAddress = process.env.STAKE_ESCROW_ADDRESS || "0x654B8495765f8Db94f4880c20F5c7E5f8a9CFe90";
+  const escrowAddress = process.env.STAKE_ESCROW_ADDRESS || "0xdf2b460F59d0Ee0B5C892A9eF1b645a33BBEF563";
   const signerWallet = new ethers.Wallet(requireEnv("SIGNER_PRIVATE_KEY"));
   const txWallet = new ethers.Wallet(requireEnv("DEPLOYER_PRIVATE_KEY"), new ethers.JsonRpcProvider(rpcUrl));
   const escrow = new ethers.Contract(escrowAddress, [

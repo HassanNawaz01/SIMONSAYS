@@ -39,7 +39,7 @@ async function main() {
   if (!ethers.isAddress(feeRecipient)) throw new Error("FEE_RECIPIENT is not a valid address.");
   if (!ethers.isAddress(signerAddress)) throw new Error("SIGNER_ADDRESS is not a valid address.");
 
-  const artifactPath = path.resolve("./artifacts/contracts/SimonStakeEscrow.sol/SimonStakeEscrow.json");
+  const artifactPath = path.resolve("./artifacts/contracts/SimonStakeEscrowV2.sol/SimonStakeEscrowV2.json");
   const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -58,7 +58,7 @@ async function main() {
 
   await contract.waitForDeployment();
   const address = await contract.getAddress();
-  console.log("SimonStakeEscrow deployed to:", address);
+  console.log("SimonStakeEscrowV2 deployed to:", address);
   console.log("");
   console.log("Paste this into base-simon.js:");
   console.log(`const STAKE_ESCROW_ADDRESS = "${address}";`);

@@ -5,8 +5,8 @@
        then paste the deployed address below.
        ========================================================= */
     const CONTRACT_ADDRESS = "0xd376DA21BDCDD1338C2283488d592880F25F09f1";
-    const STAKE_ESCROW_ADDRESS = "0x654B8495765f8Db94f4880c20F5c7E5f8a9CFe90";
-    const STAKE_ESCROW_DEPLOY_BLOCK = "0x2e34a18";
+    const STAKE_ESCROW_ADDRESS = "0xdf2b460F59d0Ee0B5C892A9eF1b645a33BBEF563";
+    const STAKE_ESCROW_DEPLOY_BLOCK = "0x2e3bcf8";
     const STAKE_DEPOSITED_TOPIC = "0xe3ad398758b9cbdf4196c5d060a1aebae967b4f9115c7394e937cbb46f449587";
 
     /* Function selectors (keccak256 of the signature, first 4 bytes) */
@@ -386,17 +386,17 @@
     }
 
     function requiredStakeValue(stakeWei) {
-      const stake = BigInt(stakeWei || "0");
-      return stake + stakeFeeValue(stakeWei);
+      return BigInt(stakeWei || "0");
     }
 
     function stakeFeeValue(stakeWei) {
       const stake = BigInt(stakeWei || "0");
-      return (stake * 5n) / 10000n;
+      return (stake * 50n) / 10000n;
     }
 
     function winningValue(stakeWei) {
-      return BigInt(stakeWei || "0") * 2n;
+      const stake = BigInt(stakeWei || "0");
+      return (stake - stakeFeeValue(stakeWei)) * 2n;
     }
 
     function formatEth(wei, maxDecimals = 9) {
@@ -410,8 +410,8 @@
       const stake = BigInt(stakeWei || "0");
       if (stake === 0n) return "";
       const feeEach = stakeFeeValue(stakeWei);
-      return "Winner gets " + formatEth(winningValue(stakeWei)) +
-        ". Platform fee " + formatEth(feeEach) + " each (" + formatEth(feeEach * 2n) + " total, 0.1%).";
+      return "Fee " + formatEth(feeEach) + " each (0.5%, deducted from stake). Winner receives " +
+        formatEth(winningValue(stakeWei)) + ".";
     }
 
     function encodeStakeDepositData(matchId, opponent, stakeWei) {
@@ -592,9 +592,9 @@
         } else if (lastSettlement || recoveredSettlement) {
           pendingRewardMsg.textContent = "Paid match ended. The server is automatically crediting the winner's reward.";
         } else if (refundable) {
-          pendingRewardMsg.textContent = "A paid match did not start. Refund the stake, then claim it here. The current contract's deposit fee is not refundable.";
+          pendingRewardMsg.textContent = "A paid match did not start. Refund the full stake, then claim it here.";
         } else if (pendingRefunds.length) {
-          pendingRewardMsg.textContent = "A paid match did not start. Refund unlocks in " + refundWaitText(pendingRefunds[0]) + ". The current contract's deposit fee is not refundable.";
+          pendingRewardMsg.textContent = "A paid match did not start. Full-stake refund unlocks in " + refundWaitText(pendingRefunds[0]) + ".";
         } else {
           pendingRewardMsg.textContent = "No pending reward right now.";
         }
@@ -1002,7 +1002,7 @@
 
         else if (msg.type === "match_go") {
           document.getElementById("matchTimer").textContent = msg.timeLeft + "s";
-          setStatus("Go! 90 seconds started.", "go");
+          setStatus("Go! 60 seconds started.", "go");
           playSequence();
         }
         

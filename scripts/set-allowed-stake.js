@@ -32,7 +32,7 @@ async function main() {
   if (!["true", "false"].includes(allowedArg)) throw new Error("Allowed value must be true or false.");
 
   const rpcUrl = process.env.BASE_RPC_URL || "https://mainnet.base.org";
-  const escrowAddress = process.env.STAKE_ESCROW_ADDRESS || "0x654B8495765f8Db94f4880c20F5c7E5f8a9CFe90";
+  const escrowAddress = process.env.STAKE_ESCROW_ADDRESS || "0xdf2b460F59d0Ee0B5C892A9eF1b645a33BBEF563";
   const wallet = new ethers.Wallet(requireEnv("DEPLOYER_PRIVATE_KEY"), new ethers.JsonRpcProvider(rpcUrl));
   const escrow = new ethers.Contract(escrowAddress, [
     "function owner() view returns (address)",
