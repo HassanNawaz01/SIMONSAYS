@@ -1383,7 +1383,7 @@
       const pMode = pad64(BigInt(mode));
       const pMatchId = cleanMatchId.padStart(64, "0");
       
-      const signatureOffset = pad64(96n);
+      const signatureOffset = pad64(128n);
       
       const sigLen = cleanSig.length / 2;
       const pSigLen = pad64(BigInt(sigLen));
