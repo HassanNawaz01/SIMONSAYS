@@ -107,7 +107,7 @@
     const $ = id => document.getElementById(id);
     const pads = [...document.querySelectorAll(".pad")], board = $("board"), statusEl = $("status");
     const levelEl = $("level"), bestEl = $("best"), chainBestEl = $("chainBest"), startBtn = $("startBtn");
-    const overlay = $("overlay"), finalScoreEl = $("finalScore"), mintBtn = $("mintBtn"), settleRewardBtn = $("settleRewardBtn"), againBtn = $("againBtn"), mintMsg = $("mintMsg");
+    const overlay = $("overlay"), finalScoreEl = $("finalScore"), mintBtn = $("mintBtn"), settleRewardBtn = $("settleRewardBtn"), againBtn = $("againBtn"), mintMsg = $("mintMsg"), resultCloseBtn = $("resultCloseBtn");
     const walletBtn = $("walletBtn"), totalGamesEl = $("totalGames"), practiceNote = $("practiceNote");
     const lbTable = $("lbTable"), lbRefresh = $("lbRefresh"), lbMeta = $("lbMeta");
     const seasonNum = $("seasonNum"), countdown = $("countdown");
@@ -134,7 +134,15 @@
     });
     document.addEventListener("keydown", event => {
       if (event.key === "Escape" && guideOverlay.classList.contains("show")) closeGuide();
+      else if (event.key === "Escape" && overlay.classList.contains("show")) closeResult();
     });
+
+    function closeResult() {
+      overlay.classList.remove("show");
+      startBtn.focus();
+    }
+
+    resultCloseBtn.addEventListener("click", closeResult);
 
     /* ================= tabs ================= */
     let quitConfirmCallback = null;
